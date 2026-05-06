@@ -11,7 +11,7 @@ class UniversalFactory:
         self.masters_path = Path(masters_path)
         self.masters = self._load_masters()
         self.api_key = os.environ.get("SILICON_FLOW_KEY") 
-        self.api_url = "https://api.xiaomimimo.com/v1/chat/completions"
+        self.api_url = "https://token-plan-sgp.xiaomimimo.com/v1/chat/completions"
         self.supabase_url = os.environ.get("SUPABASE_URL")
         self.supabase_key = os.environ.get("SUPABASE_KEY")
         self.v3_model = "mimo-v2.5-pro"
@@ -238,7 +238,7 @@ class UniversalFactory:
     def call_ai(self, model, sys_prompt, usr_prompt):
         # 🚨 关键修复：Header 必须使用 'api-key' 字段名
         headers = {
-            "api-key": self.api_key, 
+            "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
         }
         
