@@ -33,14 +33,17 @@ class NewsMonitor:
             "economist": "经济学人",
             "nytimes": "纽约时报",
             "ft": "金融时报",
-            "hackernews": "Hacker News",
+            "caixin": "财新网",
             # 科技
             "github": "GitHub Trending",
-            "producthunt": "Product Hunt",
+            "hackernews": "Hacker News",
             # 金融
             "wallstreetcn": "华尔街见闻",
             "jin10": "金十数据",
             "xueqiu": "雪球",
+            "cls": "财联社",
+            "gelonghui": "格隆汇",
+            "fastbull": "法布财经",
         }
 
         results = {}
