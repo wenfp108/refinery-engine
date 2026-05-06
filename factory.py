@@ -25,8 +25,20 @@ class UniversalFactory:
         if not self.masters_path.exists():
             print(f"⚠️ Masters 目录不存在: {self.masters_path}")
             return masters
+
+        # First load base module and add to sys.modules
+        base_path = self.masters_path / "base.py"
+        if base_path.exists():
+            try:
+                spec = importlib.util.spec_from_file_location("base", base_path)
+                base_module = importlib.util.module_from_spec(spec)
+                sys.modules["base"] = base_module
+                spec.loader.exec_module(base_module)
+            except Exception as e:
+                print(f"⚠️ base.py 加载失败: {e}")
+
         for file_path in self.masters_path.glob("*.py"):
-            if file_path.name.startswith("__"):
+            if file_path.name.startswith("__") or file_path.name == "base.py":
                 continue
             try:
                 name = file_path.stem
