@@ -11,10 +11,10 @@ class UniversalFactory:
         self.masters_path = Path(masters_path)
         self.masters = self._load_masters()
         self.api_key = os.environ.get("SILICON_FLOW_KEY") 
-        self.api_url = "https://api.siliconflow.cn/v1/chat/completions"
+        self.api_url = "https://api.xiaomimimo.com/v1/chat/completions"
         self.supabase_url = os.environ.get("SUPABASE_URL")
         self.supabase_key = os.environ.get("SUPABASE_KEY")
-        self.v3_model = "deepseek-ai/DeepSeek-V3.2"
+        self.v3_model = "mimo-v2.5-pro"
         self.vault_path = None
         self.memory = {} 
 
