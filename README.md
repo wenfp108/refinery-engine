@@ -33,7 +33,7 @@
 
 1. **采集层**（外部）→ 原始 JSON 写入 Central-Bank
 2. **Refinery** → 从 Central-Bank 读取 JSON，清洗后写入 Supabase `raw_signals` 表
-3. **Factory** → 从 Supabase 筛选精锐信号，调用 AI（mimo-v2.5-pro）进行多大师审计
+3. **Factory** → 从 Supabase 筛选精锐信号，调用 AI 进行多大师审计
 4. **归档** → 7 天前的数据打包为 Parquet 上传 Central-Bank，然后清理 Supabase
 
 ## 信号来源
