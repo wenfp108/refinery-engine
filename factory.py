@@ -236,17 +236,43 @@ class UniversalFactory:
                 self.git_push_assets()
 
     def call_ai(self, model, sys_prompt, usr_prompt):
-        # 🚨 关键修复：Header 必须使用 'api-key' 字段名
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
         }
-        
-        payload = {"model": model, "messages": [{"role": "system", "content": sys_prompt}, {"role": "user", "content": usr_prompt}], "temperature": 0.7}
-        try:
-            res = requests.post(self.api_url, json=payload, headers=headers, timeout=60).json()
-            return "SUCCESS", res['choices'][0]['message']['content']
-        except: return "ERROR", "AI_FAIL"
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": sys_prompt},
+                {"role": "user", "content": usr_prompt}
+            ],
+            "temperature": 0.7
+        }
+
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                resp = requests.post(self.api_url, json=payload, headers=headers, timeout=60)
+                resp.raise_for_status()
+                data = resp.json()
+                content = data['choices'][0]['message']['content']
+                return "SUCCESS", content
+            except requests.exceptions.Timeout:
+                print(f"   ⏳ AI 调用超时 (第 {attempt+1}/{max_retries} 次)")
+            except requests.exceptions.HTTPError as e:
+                print(f"   ⚠️ AI HTTP 错误 {e.response.status_code} (第 {attempt+1}/{max_retries} 次)")
+            except (KeyError, IndexError):
+                print(f"   ⚠️ AI 返回格式异常 (第 {attempt+1}/{max_retries} 次)")
+                return "ERROR", "AI_FORMAT_ERROR"
+            except Exception as e:
+                print(f"   ⚠️ AI 调用异常: {e} (第 {attempt+1}/{max_retries} 次)")
+
+            if attempt < max_retries - 1:
+                wait = 2 ** (attempt + 1)
+                print(f"   💤 等待 {wait}s 后重试...")
+                time.sleep(wait)
+
+        return "ERROR", "AI_FAIL"
 
     def git_push_assets(self):
         """防御型推送：解决身份未知、未提交更改以及远程拒绝问题"""
