@@ -1,4 +1,4 @@
-name: 🚀 Daily Heartbeat Factory
+name: 🚀 Daily Heartbeat (Keep Alive Only)
 
 on:
   schedule:
@@ -9,29 +9,20 @@ permissions:
   contents: write
 
 jobs:
-  minimal-process:
+  heartbeat:
     runs-on: ubuntu-latest
     steps:
-      # 1. 拿代码
       - uses: actions/checkout@v4
 
-      # 2. 安装目前报错提示的所有依赖
-      - name: 📦 Install Dependencies
-        run: |
-          pip install pandas supabase
-          # 如果后面还报别的 ModuleNotFoundError，直接在上面这行空格补上库名即可
-
-      # 3. 依次跑完 3 个脚本
-      - name: ⚙️ Run 3 Scripts
-        run: |
-          python factory.py
-          python refinery.py
-          python run_factory.py
-
-      # 4. 刷心跳（防止 GitHub 关停仓库）
-      - name: 🛡️ Heartbeat
+      - name: 🛡️ 修改日期并推送 (这就是你要的“手动改MD”)
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # 直接修改 README 里的日期
           sed -i "s/Last Updated: .*/Last Updated: $(date +%Y-%m-%d)/" README.md
-          git add README.md && git commit -m "chore: daily heartbeat [skip ci]" && git push || echo "No changes"
+          
+          # 提交并推送
+          git add README.md
+          git commit -m "chore: daily heartbeat [skip ci]" || echo "No changes"
+          git push
