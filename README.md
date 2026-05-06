@@ -46,6 +46,27 @@
 | Reddit | score × vibe | 30 |
 | Polymarket | 策略标签 + 流动性 | 80 |
 
+## 新闻监控
+
+集成 [NewsNow](https://github.com/wenfp108/newsnow) 数据源，每日自动监控：
+
+| 数据源 | 类型 | 更新频率 |
+|--------|------|---------|
+| 经济学人 | 国际新闻 | 慢 |
+| 纽约时报 | 国际新闻 | 中 |
+| 金融时报 | 财经新闻 | 中 |
+| GitHub Trending | 科技 | 快 |
+| Hacker News | 科技 | 中 |
+| 华尔街见闻 | 财经 | 快 |
+| 金十数据 | 财经 | 快 |
+
+运行新闻监控：
+```bash
+python news_monitor.py
+```
+
+统计数据保存在 `news_stats.json`，保留最近 30 天记录。
+
 ## 配置
 
 所有可调参数在 `config.py`，包括：
