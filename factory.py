@@ -236,7 +236,12 @@ class UniversalFactory:
                 self.git_push_assets()
 
     def call_ai(self, model, sys_prompt, usr_prompt):
-        headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+        # 🚨 关键修复：Header 必须使用 'api-key' 字段名
+        headers = {
+            "api-key": self.api_key, 
+            "Content-Type": "application/json"
+        }
+        
         payload = {"model": model, "messages": [{"role": "system", "content": sys_prompt}, {"role": "user", "content": usr_prompt}], "temperature": 0.7}
         try:
             res = requests.post(self.api_url, json=payload, headers=headers, timeout=60).json()
