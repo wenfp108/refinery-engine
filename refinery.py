@@ -58,7 +58,8 @@ def get_data_freshness(table_name, source_name=None):
         try:
             last_time_str = last_time_str.replace('Z', '+00:00')
             last_time = datetime.fromisoformat(last_time_str)
-        except:
+        except (ValueError, TypeError) as e:
+            print(f"   ⚠️ 时间解析失败 '{last_time_str}': {e}")
             return (False, 9999, last_time_str)
         
         now = datetime.now(timezone(timedelta(hours=8)))
@@ -120,7 +121,7 @@ def generate_hot_reports(processors_config):
                             md_report += f"| {item.get('score','-')} | {item.get('full_text','-')} | [🔗]({item.get('url','#')}) |\n"
                     md_report += "\n"
             except Exception as e:
-                pass 
+                print(f"   ⚠️ 来源 {source_name} 报告生成失败: {e}")
 
     if not has_content:
         md_report += "\n\n**🛑 本轮扫描全域静默，请查阅历史归档。**"
@@ -130,7 +131,7 @@ def generate_hot_reports(processors_config):
             old = private_repo.get_contents(report_path)
             private_repo.update_file(old.path, f"📊 Update: {file_name}", md_report, old.sha)
             print(f"📝 战报更新：{report_path}")
-        except:
+        except Exception:
             private_repo.create_file(report_path, f"🚀 New: {file_name}", md_report)
             print(f"📝 战报创建：{report_path}")
     except Exception as e: 

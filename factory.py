@@ -5,42 +5,49 @@ from datetime import datetime, timezone, timedelta
 from concurrent.futures import ThreadPoolExecutor
 from supabase import create_client
 import importlib.util
+import config as cfg
+
 
 class UniversalFactory:
     def __init__(self, masters_path="masters"):
         self.masters_path = Path(masters_path)
         self.masters = self._load_masters()
-        self.api_key = os.environ.get("SILICON_FLOW_KEY") 
-        self.api_url = "https://token-plan-sgp.xiaomimimo.com/v1/chat/completions"
+        self.api_key = os.environ.get("SILICON_FLOW_KEY")
+        self.api_url = cfg.AI_API_URL
         self.supabase_url = os.environ.get("SUPABASE_URL")
         self.supabase_key = os.environ.get("SUPABASE_KEY")
-        self.v3_model = "mimo-v2.5-pro"
+        self.v3_model = cfg.AI_MODEL
         self.vault_path = None
-        self.memory = {} 
+        self.memory = {}
 
     def _load_masters(self):
         masters = {}
-        if not self.masters_path.exists(): return masters
+        if not self.masters_path.exists():
+            print(f"⚠️ Masters 目录不存在: {self.masters_path}")
+            return masters
         for file_path in self.masters_path.glob("*.py"):
-            if file_path.name.startswith("__"): continue
+            if file_path.name.startswith("__"):
+                continue
             try:
                 name = file_path.stem
                 spec = importlib.util.spec_from_file_location(name, file_path)
                 module = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(module)
-                if hasattr(module, 'audit'): masters[name] = module
-                print(f"✅ 已加载 Master: {name}")
-            except: pass
+                if hasattr(module, 'audit'):
+                    masters[name] = module
+                    print(f"✅ 已加载 Master: {name}")
+            except Exception as e:
+                print(f"⚠️ Master {file_path.name} 加载失败: {e}")
         return masters
 
     def build_day_memory(self, vault_path):
-        """🧠 跨时区记忆同步：锁定今日已审计的哈希，省钱核心"""
         day_str = datetime.now().strftime('%Y%m%d')
         instructions_dir = vault_path / "instructions"
-        if not instructions_dir.exists(): return set()
-        
+        if not instructions_dir.exists():
+            return set()
+
         day_processed_ids = set()
-        print(f"🧐 正在加载今日全天（2小时步进）记忆...")
+        print(f"🧐 正在加载今日全天记忆...")
         for f in instructions_dir.glob(f"teachings_{day_str}_*.jsonl"):
             try:
                 with open(f, 'r', encoding='utf-8') as f_in:
@@ -49,112 +56,143 @@ class UniversalFactory:
                             data = json.loads(line)
                             tid, m, rid = data.get('topic_id'), data.get('master'), data.get('ref_id')
                             if tid and m:
-                                if tid not in self.memory: self.memory[tid] = {}
+                                if tid not in self.memory:
+                                    self.memory[tid] = {}
                                 self.memory[tid][m] = data.get('output', "")
-                            if rid: day_processed_ids.add(rid)
-                        except: continue
-            except: pass
+                            if rid:
+                                day_processed_ids.add(rid)
+                        except (json.JSONDecodeError, TypeError) as e:
+                            print(f"   ⚠️ 记忆行解析失败: {e}")
+                            continue
+            except Exception as e:
+                print(f"   ⚠️ 记忆文件读取失败 {f.name}: {e}")
         print(f"✅ 记忆构建：锁定 {len(day_processed_ids)} 个历史哈希")
         return day_processed_ids
 
+    # ─────────────────────────────────────────────
+    #  信号筛选：每个来源独立函数 + 统一调度器
+    # ─────────────────────────────────────────────
+
+    def _fetch_github(self, supabase):
+        raw = supabase.table("raw_signals").select("*") \
+            .eq("signal_type", "github") \
+            .order("created_at", desc=True).limit(cfg.FETCH_LIMITS["github"]) \
+            .execute().data or []
+        unique = {}
+        for r in raw:
+            name = r.get('repo_name')
+            if name and name not in unique:
+                unique[name] = r
+        picks = list(unique.values())[:cfg.SIGNAL_QUOTAS["github"]]
+        print(f"✅ GitHub: 获 {len(picks)} 条")
+        return picks
+
+    def _fetch_papers(self, supabase):
+        raw = supabase.table("raw_signals").select("*") \
+            .eq("signal_type", "papers") \
+            .order("created_at", desc=True).limit(cfg.FETCH_LIMITS["papers"]) \
+            .execute().data or []
+        unique = {}
+        for r in raw:
+            title = r.get('title') or r.get('headline')
+            if not title and r.get('full_text'):
+                title = r.get('full_text')[:30]
+            if title and title not in unique:
+                r['title'] = title
+                unique[title] = r
+        picks = list(unique.values())[:cfg.SIGNAL_QUOTAS["papers"]]
+        print(f"✅ Papers: 获 {len(picks)} 条")
+        return picks
+
+    def _fetch_twitter(self, supabase):
+        raw = supabase.table("raw_signals").select("*") \
+            .eq("signal_type", "twitter") \
+            .order("created_at", desc=True).limit(cfg.FETCH_LIMITS["twitter"]) \
+            .execute().data or []
+        vip_names = [v.lower() for v in cfg.TWITTER_VIP_LIST]
+        def score(row):
+            rt = row.get('retweets', 0)
+            bm = row.get('bookmarks', 0)
+            like = row.get('likes', 0)
+            user = str(row.get('user_name', '')).lower()
+            s = (rt * cfg.TWITTER_SCORE_RETWEET) + (bm * cfg.TWITTER_SCORE_BOOKMARK) + like
+            if any(v in user for v in vip_names):
+                s += cfg.TWITTER_VIP_BONUS_HIGH if (rt > cfg.TWITTER_VIP_HIGH_RT_THRESHOLD or like > cfg.TWITTER_VIP_HIGH_LIKE_THRESHOLD) else cfg.TWITTER_VIP_BONUS_LOW
+            return s
+        for r in raw:
+            r['_rank'] = score(r)
+        picks = sorted(raw, key=lambda x: x['_rank'], reverse=True)[:cfg.SIGNAL_QUOTAS["twitter"]]
+        print(f"✅ Twitter: 获 {len(picks)} 条")
+        return picks
+
+    def _fetch_reddit(self, supabase):
+        raw = supabase.table("raw_signals").select("*") \
+            .eq("signal_type", "reddit") \
+            .order("created_at", desc=True).limit(cfg.FETCH_LIMITS["reddit"]) \
+            .execute().data or []
+        unique = {r.get('url'): r for r in raw if r.get('url')}
+        def score(row):
+            return (row.get('score') or 0) * (1 + abs(float(row.get('vibe') or 0)))
+        picks = sorted(unique.values(), key=score, reverse=True)[:cfg.SIGNAL_QUOTAS["reddit"]]
+        print(f"✅ Reddit: 获 {len(picks)} 条")
+        return picks
+
+    def _fetch_polymarket(self, supabase):
+        raw = supabase.table("raw_signals").select("*") \
+            .eq("signal_type", "polymarket") \
+            .order("created_at", desc=True).limit(cfg.FETCH_LIMITS["polymarket"]) \
+            .execute().data or []
+        unique = {}
+        for p in raw:
+            raw_json = p.get('raw_json')
+            if isinstance(raw_json, str):
+                try:
+                    raw_json = json.loads(raw_json)
+                except (json.JSONDecodeError, TypeError) as e:
+                    print(f"   ⚠️ Polymarket raw_json 解析失败: {e}")
+                    raw_json = {}
+            p['_parsed'] = raw_json
+            slug = p.get('slug') or raw_json.get('slug')
+            if slug:
+                curr_liq = float(p.get('liquidity') or 0)
+                if slug not in unique or curr_liq > float(unique[slug].get('liquidity', 0)):
+                    unique[slug] = p
+
+        def score(row):
+            parsed = row['_parsed']
+            liq = float(row.get('liquidity') or 0)
+            tags = parsed.get('strategy_tags', [])
+            for tag_name, bonus in cfg.POLY_STRATEGY_BONUS.items():
+                if tag_name in tags:
+                    return bonus + liq
+            cat = str(row.get('category', '')).upper()
+            if any(kw in cat for kw in cfg.POLY_CATEGORY_KEYWORDS):
+                return cfg.POLY_CATEGORY_BONUS + liq
+            return cfg.POLY_BASE_SCORE + liq
+
+        picks = sorted(unique.values(), key=score, reverse=True)[:cfg.SIGNAL_QUOTAS["polymarket"]]
+        print(f"✅ Polymarket: 获 {len(picks)} 条")
+        return picks
+
     def fetch_elite_signals(self):
-        """🌟 严格保留你的原装权重 50/60/30/80"""
         try:
             supabase = create_client(self.supabase_url, self.supabase_key)
-            print("💎 启动 2 小时一度精锐筛选...")
-
-            # === 1. GitHub 信号独立处理 (保底 20 条) ===
-            print("💎 正在获取 GitHub 信号...")
-            # 这里的 limit 改成了 100，多抓点更保险
-            github_raw = supabase.table("raw_signals").select("*").eq("signal_type", "github").order("created_at", desc=True).limit(100).execute().data or []
-            
-            unique_github = {}
-            for r in github_raw:
-                # GitHub 专属去重键：repo_name
-                name = r.get('repo_name')
-                if name and name not in unique_github:
-                    unique_github[name] = r
-            
-            github_picks = list(unique_github.values())[:20]  # 稳拿 20 条
-            print(f"✅ GitHub 独立处理完成：获 {len(github_picks)} 条")
-
-            # === 2. Paper 信号独立处理 (保底 30 条) ===
-            print("💎 正在获取 Paper 信号...")
-            # 这里的 limit 也改成了 100
-            paper_raw = supabase.table("raw_signals").select("*").eq("signal_type", "papers").order("created_at", desc=True).limit(100).execute().data or []
-            
-            unique_paper = {}
-            for r in paper_raw:
-                # Paper 专属去重键：title (增加防御逻辑，防止因为没标题被扔掉)
-                title = r.get('title') or r.get('headline')
-                
-                # 如果没标题，强行截取正文前30字当标题，确保数据不丢失
-                if not title and r.get('full_text'):
-                    title = r.get('full_text')[:30]
-
-                if title and title not in unique_paper:
-                    # 🚨 关键修复：把找到的标题写回 r，防止后面生成 Prompt 时 title 还是 None
-                    r['title'] = title 
-                    unique_paper[title] = r
-            
-            paper_picks = list(unique_paper.values())[:30]  # 稳拿 30 条
-            print(f"✅ Paper 独立处理完成：获 {len(paper_picks)} 条")
-
-            # === 3. Twitter (VIP 权重) - 保持原样 ===
-            print("💎 正在获取 Twitter 信号...")
-            tw_raw = supabase.table("raw_signals").select("*").eq("signal_type", "twitter").order("created_at", desc=True).limit(500).execute().data or []
-            vip_list = ['Karpathy', 'Musk', 'Vitalik', 'LeCun', 'Dalio', 'Naval', 'Sama', 'PaulG']
-            def score_twitter(row):
-                rt, bm, like = row.get('retweets',0), row.get('bookmarks',0), row.get('likes',0)
-                user = str(row.get('user_name', '')).lower()
-                score = (rt * 5) + (bm * 10) + like
-                if any(v.lower() in user for v in vip_list):
-                    score += 10000 if (rt > 10 or like > 50) else 500
-                return score
-            for r in tw_raw: r['_rank'] = score_twitter(r)
-            tw_picks = sorted(tw_raw, key=lambda x:x['_rank'], reverse=True)[:60]
-            print(f"✅ Twitter 处理完成：获 {len(tw_picks)} 条")
-
-            # === 4. Reddit (Vibe 权重) - 保持原样 ===
-            print("💎 正在获取 Reddit 信号...")
-            rd_raw = supabase.table("raw_signals").select("*").eq("signal_type", "reddit").order("created_at", desc=True).limit(500).execute().data or []
-            unique_rd = {r.get('url'): r for r in rd_raw if r.get('url')}
-            def score_reddit(row): return (row.get('score') or 0) * (1 + abs(float(row.get('vibe') or 0)))
-            rd_picks = sorted(unique_rd.values(), key=score_reddit, reverse=True)[:30]
-            print(f"✅ Reddit 处理完成：获 {len(rd_picks)} 条")
-
-            # === 5. Polymarket (Tail_Risk 权重) - 保持原样 ===
-            print("💎 正在获取 Polymarket 信号...")
-            poly_raw = supabase.table("raw_signals").select("*").eq("signal_type", "polymarket").order("created_at", desc=True).limit(800).execute().data or []
-            unique_poly = {}
-            for p in poly_raw:
-                raw = p.get('raw_json')
-                if isinstance(raw, str):
-                    try: raw = json.loads(raw)
-                    except: raw = {}
-                p['_parsed'] = raw
-                slug = p.get('slug') or raw.get('slug')
-                if slug:
-                    curr_liq = float(p.get('liquidity') or 0)
-                    if slug not in unique_poly or curr_liq > float(unique_poly[slug].get('liquidity',0)):
-                        unique_poly[slug] = p
-            def score_poly(row):
-                raw, liq = row['_parsed'], float(row.get('liquidity') or 0)
-                if 'TAIL_RISK' in raw.get('strategy_tags', []): return 10000000 + liq
-                if any(x in str(row.get('category','')).upper() for x in ['ECONOMY', 'TECH']): return 5000000 + liq
-                return 1000000 + liq
-            poly_picks = sorted(unique_poly.values(), key=score_poly, reverse=True)[:80]
-            print(f"✅ Polymarket 处理完成：获 {len(poly_picks)} 条")
-
-            return github_picks + paper_picks + tw_picks + rd_picks + poly_picks
+            print("💎 启动精锐筛选...")
+            results = []
+            results.extend(self._fetch_github(supabase))
+            results.extend(self._fetch_papers(supabase))
+            results.extend(self._fetch_twitter(supabase))
+            results.extend(self._fetch_reddit(supabase))
+            results.extend(self._fetch_polymarket(supabase))
+            return results
         except Exception as e:
-            print(f"⚠️ 筛选异常: {e}"); return []
+            print(f"⚠️ 筛选异常: {e}")
+            return []
 
     def audit_process(self, row, processed_ids):
         topic_id = row.get('url') or row.get('slug') or row.get('repo_name') or "unknown"
         source = row.get('signal_type', 'unknown').lower()
-        
-        # 严格对齐格式
+
         parts = [f"【Source: {source.upper()}】"]
         if source == 'github':
             parts.append(f"项目: {row.get('repo_name')} | Stars: {row.get('stars')} | Topics: {row.get('topics')}")
@@ -163,24 +201,24 @@ class UniversalFactory:
             parts.append(f"论文: {row.get('title')} | 期刊: {row.get('journal')}")
             parts.append(f"引用: {row.get('citations')} | 摘要: {row.get('full_text')}")
         elif source in ['twitter', 'reddit']:
-            parts.append(f"用户: {row.get('user_name') or row.get('subreddit')} | Score: {row.get('_rank',0)}")
+            parts.append(f"用户: {row.get('user_name') or row.get('subreddit')} | Score: {row.get('_rank', 0)}")
             parts.append(f"内容: {row.get('full_text') or row.get('title')}")
-        else: # Polymarket
+        else:
             raw = row.get('_parsed') or row.get('raw_json') or {}
             parts.append(f"预测: {row.get('title')} | 问题: {row.get('question')}")
             parts.append(f"价格: {row.get('prices') or raw.get('outcome_prices')} | 流动性: ${raw.get('liquidity')}")
 
         content = "\n".join(parts)
         ref_id = hashlib.sha256(content.encode()).hexdigest()
-        
-        # 核心去重：如果今天审过，直接跳过，不花 API 钱
-        if ref_id in processed_ids: return []
+
+        if ref_id in processed_ids:
+            return []
 
         results = []
         def ask_v3(s, u):
             st, r = self.call_ai(self.v3_model, s, u)
             if st == "SUCCESS" and "### Output" in r:
-                return r.split("### Output")[0].replace("### Thought","").strip(), r.split("### Output")[1].strip()
+                return r.split("### Output")[0].replace("### Thought", "").strip(), r.split("### Output")[1].strip()
             return "Audit", r
 
         for name, mod in self.masters.items():
@@ -197,39 +235,38 @@ class UniversalFactory:
                             "drift": "[DRIFT_DETECTED]" in o,
                             "source": source, "thought": t, "output": o
                         }, ensure_ascii=False))
-            except: continue
+            except Exception as e:
+                print(f"   ⚠️ Master {name} 审计异常 (topic={topic_id}): {e}")
+                continue
         return results
 
     def process_and_ship(self, vault_path="vault"):
         self.vault_path = Path(vault_path)
         (self.vault_path / "instructions").mkdir(parents=True, exist_ok=True)
-        
-        # 1. 加载今日全天去重 ID
+
         processed_ids = self.build_day_memory(self.vault_path)
-        
+
         now = datetime.now()
         day_str = now.strftime('%Y%m%d')
         hour_str = now.strftime('%H')
         output_file = self.vault_path / "instructions" / f"teachings_{day_str}_{hour_str}.jsonl"
 
-        # 2. 筛选
         signals = self.fetch_elite_signals()
-        if not signals: return
+        if not signals:
+            return
 
-        # 3. 审计并实时锁定 ID
-        batch_size = 50
-        for i in range(0, len(signals), batch_size):
-            chunk = signals[i : i + batch_size]
-            with ThreadPoolExecutor(max_workers=20) as executor:
+        for i in range(0, len(signals), cfg.AUDIT_BATCH_SIZE):
+            chunk = signals[i:i + cfg.AUDIT_BATCH_SIZE]
+            with ThreadPoolExecutor(max_workers=cfg.AUDIT_WORKERS) as executor:
                 res = list(executor.map(lambda r: self.audit_process(r, processed_ids), chunk))
-            
+
             added = []
             for r_list in res:
                 if r_list:
                     added.extend(r_list)
-                    # 实时存入，防止同一批次内由于 Supabase 延迟导致的重复
-                    for r_json in r_list: processed_ids.add(json.loads(r_json).get('ref_id'))
-            
+                    for r_json in r_list:
+                        processed_ids.add(json.loads(r_json).get('ref_id'))
+
             if added:
                 with open(output_file, 'a', encoding='utf-8') as f:
                     f.write('\n'.join(added) + '\n')
@@ -249,25 +286,24 @@ class UniversalFactory:
             "temperature": 0.7
         }
 
-        max_retries = 3
-        for attempt in range(max_retries):
+        for attempt in range(cfg.AI_MAX_RETRIES):
             try:
-                resp = requests.post(self.api_url, json=payload, headers=headers, timeout=60)
+                resp = requests.post(self.api_url, json=payload, headers=headers, timeout=cfg.AI_TIMEOUT)
                 resp.raise_for_status()
                 data = resp.json()
                 content = data['choices'][0]['message']['content']
                 return "SUCCESS", content
             except requests.exceptions.Timeout:
-                print(f"   ⏳ AI 调用超时 (第 {attempt+1}/{max_retries} 次)")
+                print(f"   ⏳ AI 调用超时 (第 {attempt+1}/{cfg.AI_MAX_RETRIES} 次)")
             except requests.exceptions.HTTPError as e:
-                print(f"   ⚠️ AI HTTP 错误 {e.response.status_code} (第 {attempt+1}/{max_retries} 次)")
+                print(f"   ⚠️ AI HTTP 错误 {e.response.status_code} (第 {attempt+1}/{cfg.AI_MAX_RETRIES} 次)")
             except (KeyError, IndexError):
-                print(f"   ⚠️ AI 返回格式异常 (第 {attempt+1}/{max_retries} 次)")
+                print(f"   ⚠️ AI 返回格式异常 (第 {attempt+1}/{cfg.AI_MAX_RETRIES} 次)")
                 return "ERROR", "AI_FORMAT_ERROR"
             except Exception as e:
-                print(f"   ⚠️ AI 调用异常: {e} (第 {attempt+1}/{max_retries} 次)")
+                print(f"   ⚠️ AI 调用异常: {e} (第 {attempt+1}/{cfg.AI_MAX_RETRIES} 次)")
 
-            if attempt < max_retries - 1:
+            if attempt < cfg.AI_MAX_RETRIES - 1:
                 wait = 2 ** (attempt + 1)
                 print(f"   💤 等待 {wait}s 后重试...")
                 time.sleep(wait)
