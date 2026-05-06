@@ -15,14 +15,20 @@ jobs:
       # 1. 拿代码
       - uses: actions/checkout@v4
 
-      # 2. 跑脚本（把你的三个脚本写在这里）
+      # 2. 安装必要的依赖（这是修复报错的关键）
+      - name: 📦 Install Dependencies
+        run: |
+          pip install pandas
+          # 如果你后面发现还缺别的库，可以在这里继续加，比如 pip install requests
+
+      # 3. 跑脚本
       - name: ⚙️ Run 3 Scripts
         run: |
           python factory.py
           python refinery.py
           python run_factory.py
 
-      # 3. 刷心跳（改日期并推送，防止 GitHub 关停）
+      # 4. 刷心跳（保活逻辑）
       - name: 🛡️ Heartbeat
         run: |
           git config --global user.name "github-actions[bot]"
