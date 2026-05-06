@@ -1,9 +1,9 @@
-name: 🚀 Daily Heartbeat (Keep Alive Only)
+name: 🚀 Daily Heartbeat (Anti-Suspension)
 
 on:
   schedule:
-    - cron: '0 0 * * *'
-  workflow_dispatch:
+    - cron: '0 0 * * *' # 每天北京时间早 8 点
+  workflow_dispatch:   # 支持手动触发
 
 permissions:
   contents: write
@@ -14,15 +14,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: 🛡️ 修改日期并推送 (这就是你要的“手动改MD”)
+      - name: 🛡️ 稳健打卡 (Python 版)
         run: |
+          # 1. 设置身份
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           
-          # 直接修改 README 里的日期
-          sed -i "s/Last Updated: .*/Last Updated: $(date +%Y-%m-%d)/" README.md
+          # 2. 用 Python 进行物理替换，100% 解决星号匹配问题
+          python3 -c "
+          import datetime, os
+          filename = 'README.md'
+          if os.path.exists(filename):
+              with open(filename, 'r', encoding='utf-8') as f:
+                  lines = f.readlines()
+              with open(filename, 'w', encoding='utf-8') as f:
+                  for line in lines:
+                      # 只要这行包含 Last Updated，就强制重写整行
+                      if 'Last Updated' in line:
+                          f.write(f'    * **Last Updated**: {datetime.date.today()}\n')
+                      else:
+                          f.write(line)
+          "
           
-          # 提交并推送
+          # 3. 提交并推送
           git add README.md
           git commit -m "chore: daily heartbeat [skip ci]" || echo "No changes"
           git push
