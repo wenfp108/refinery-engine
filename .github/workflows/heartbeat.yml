@@ -1,0 +1,31 @@
+name: 🚀 Daily Heartbeat Factory
+
+on:
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  minimal-process:
+    runs-on: ubuntu-latest
+    steps:
+      # 1. 拿代码
+      - uses: actions/checkout@v4
+
+      # 2. 跑脚本（把你的三个脚本写在这里）
+      - name: ⚙️ Run 3 Scripts
+        run: |
+          python factory.py
+          python refinery.py
+          python run_factory.py
+
+      # 3. 刷心跳（改日期并推送，防止 GitHub 关停）
+      - name: 🛡️ Heartbeat
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          sed -i "s/Last Updated: .*/Last Updated: $(date +%Y-%m-%d)/" README.md
+          git add README.md && git commit -m "chore: daily heartbeat [skip ci]" && git push || echo "No changes"
