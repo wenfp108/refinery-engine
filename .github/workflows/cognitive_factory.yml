@@ -43,6 +43,7 @@ jobs:
       # 4️⃣ 环境准备
       - name: Setup Environment
         run: |
+          rm -f refinery/masters
           mkdir -p refinery/masters
           cp -r masters_repo/masters/*.py refinery/masters/
           echo "✅ 大师插件装载完毕"
