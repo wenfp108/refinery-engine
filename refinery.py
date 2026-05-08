@@ -134,8 +134,64 @@ def generate_hot_reports(processors_config):
         except Exception:
             private_repo.create_file(report_path, f"🚀 New: {file_name}", md_report)
             print(f"📝 战报创建：{report_path}")
-    except Exception as e: 
+    except Exception as e:
         print(f"❌ 写入失败: {e}")
+
+    # 清理7天前的旧报告
+    try:
+        cutoff = bj_now - timedelta(days=7)
+        _cleanup_old_reports(cutoff)
+    except Exception as e:
+        print(f"⚠️ 清理旧报告失败: {e}")
+
+
+def _cleanup_old_reports(cutoff):
+    """删除 reports/ 下超过7天的战报文件（每次只删最老的一天，避免API过载）"""
+    try:
+        reports_dir = private_repo.get_contents("reports")
+    except Exception:
+        return
+
+    # 收集所有日期目录
+    old_dirs = []
+    for year_dir in reports_dir:
+        if not year_dir.type == 'dir' or not year_dir.name.isdigit():
+            continue
+        try:
+            month_dirs = private_repo.get_contents(year_dir.path)
+        except Exception:
+            continue
+        for month_dir in month_dirs:
+            if not month_dir.type == 'dir':
+                continue
+            try:
+                day_dirs = private_repo.get_contents(month_dir.path)
+            except Exception:
+                continue
+            for day_dir in day_dirs:
+                if not day_dir.type == 'dir':
+                    continue
+                try:
+                    date_str = f"{year_dir.name}-{month_dir.name}-{day_dir.name}"
+                    dir_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+                    if dir_date < cutoff.date():
+                        old_dirs.append(day_dir)
+                except Exception:
+                    continue
+
+    if not old_dirs:
+        return
+
+    # 只删最老的一天（每次运行删24个文件，不超API限制）
+    oldest = old_dirs[0]
+    try:
+        files = private_repo.get_contents(oldest.path)
+        for f in files:
+            private_repo.delete_file(f.path, f"🗑️ 清理旧报告: {f.name}", f.sha)
+            print(f"🗑️ 删除: {f.path}")
+        print(f"✅ 已清理 {oldest.path}")
+    except Exception as e:
+        print(f"⚠️ 清理 {oldest.path} 失败: {e}")
 
 # === 🚜 4. 滚动收割 (✅ 修正版：只清理 raw_signals) ===
 def perform_grand_harvest(processors_config):

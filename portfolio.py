@@ -29,16 +29,15 @@ from portfolio_config import ALLOCATION, ASSET_CLASS, US_SYMBOLS, A_SHARE_SYMBOL
 
 DATA = BANK / 'data' / 'portfolio'
 DATA.mkdir(parents=True, exist_ok=True)
-REPORT = BANK / 'reports' / 'portfolio'
-REPORT.mkdir(parents=True, exist_ok=True)
 
 # ---- 价格 ----
 
 def fetch_prices():
     all_prices = {}
 
-    # 动态获取 USD/CNY 汇率
+    # 动态获取 USD/CNY 汇率 + VIX 恐慌指数
     fx = USD_CNY
+    vix = None
     try:
         import yfinance as yf
         fx_data = yf.download('CNY=X', period='5d', progress=False)
@@ -48,8 +47,16 @@ def fetch_prices():
         fx_val = fx_close.dropna().iloc[-1]
         fx = round(float(fx_val.item() if hasattr(fx_val, 'item') else fx_val), 4)
         print(f"  USD/CNY: {fx}")
+        # VIX
+        vix_data = yf.download('^VIX', period='5d', progress=False)
+        vix_close = vix_data['Close']
+        if hasattr(vix_close, 'columns'):
+            vix_close = vix_close.iloc[:, 0]
+        vix_val = vix_close.dropna().iloc[-1]
+        vix = round(float(vix_val.item() if hasattr(vix_val, 'item') else vix_val), 2)
+        print(f"  VIX: {vix}")
     except Exception as e:
-        print(f"  USD/CNY 获取失败，用配置值 {USD_CNY}: {e}")
+        print(f"  USD/CNY/VIX 获取失败: {e}")
 
     # 美股
     try:
@@ -92,6 +99,8 @@ def fetch_prices():
     except Exception as e:
         print(f"  BTC价格获取失败: {e}")
 
+    if vix is not None:
+        all_prices['_vix'] = vix
     print(f"Prices: {len(all_prices)} symbols")
     return all_prices
 
@@ -230,56 +239,18 @@ def daily_snapshot(prices=None):
         print(f"  ⚠️ 日收益 {daily_ret:+.2f}% 异常！可能是价格数据缺失，跳过本次快照")
         return
 
+    # VIX（从 prices 中取出，不存入持仓）
+    vix = prices.pop('_vix', None)
+
     snapshot = {
         'date': today, 'total_value': round(total, 2),
         'daily_return': daily_ret, 'cumulative_return': round(cum_ret, 4),
+        'vix': vix,
         'positions': detail,
     }
     (DATA / f'snapshot_{today}.json').write_text(json.dumps(snapshot, indent=2, default=str))
 
-    # 找今日最佳和最差
-    performers = [(s, d['pnl_pct']) for s, d in detail.items() if s != 'CASH' and 'pnl_pct' in d]
-    best = max(performers, key=lambda x: x[1]) if performers else ('-', 0)
-    worst = min(performers, key=lambda x: x[1]) if performers else ('-', 0)
-
-    # 通胀调整（年化CPI）
-    # 找第一天有持仓的日期，计算天数
-    trade_dates = []
-    trades_f = DATA / 'trades.jsonl'
-    if trades_f.exists():
-        with open(trades_f) as f:
-            for line in f:
-                t = json.loads(line)
-                trade_dates.append(t['date'])
-    first_date = min(trade_dates) if trade_dates else today
-    days_held = (date.fromisoformat(today) - date.fromisoformat(first_date)).days
-    inflation_rate = CPI_ANNUAL
-    inflation_adj = (1 + inflation_rate) ** (days_held / 365) - 1
-    real_ret = cum_ret - inflation_adj * 100
-
-    # 追加到报告
-    daily_sign = '+' if (daily_ret or 0) >= 0 else ''
-    cum_sign = '+' if cum_ret >= 0 else ''
-    real_sign = '+' if real_ret >= 0 else ''
-    row = f"| {today} | ¥{total:,.0f} | ¥{total_deposited:,.0f} | {cum_sign}{cum_ret:.2f}% | {real_sign}{real_ret:.2f}% | {daily_sign}{daily_ret or 0:.2f}% | {best[0]} {best[1]:+.1f}% | {worst[0]} {worst[1]:+.1f}% |\n"
-
-    report_file = REPORT / 'portfolio.md'
-    if report_file.exists():
-        content = report_file.read_text()
-    else:
-        content = "# 模拟组合日报\n\n| 日期 | 总市值 | 投入 | 累计收益 | 扣通胀 | 日收益 | 最佳 | 最差 |\n|------|--------|------|---------|--------|--------|------|------|\n"
-
-    # 插入到表头之后
-    lines = content.split('\n')
-    header_idx = next((i for i, l in enumerate(lines) if l.startswith('|------')), None)
-    if header_idx is not None:
-        lines.insert(header_idx + 1, row.rstrip())
-    else:
-        lines.append(row.rstrip())
-    report_file.write_text('\n'.join(lines))
-
-    print(f"\nSnapshot {today}: ¥{total:,.0f} | cum:{cum_sign}{cum_ret:.2f}% | daily:{daily_sign}{daily_ret or 0:.2f}%")
-    print(f"  Best: {best[0]} {best[1]:+.1f}% | Worst: {worst[0]} {worst[1]:+.1f}%")
+    print(f"\nSnapshot {today}: ¥{total:,.0f} | cum:{cum_ret:+.2f}% | daily:{daily_ret or 0:+.2f}% | VIX:{vix or '-'}")
 
 # ---- 回测 ----
 
@@ -303,7 +274,7 @@ def backtest(start_date='2026-03-01'):
 
     # 批量下载美股历史数据
     print("下载历史价格...")
-    # 下载USD/CNY汇率历史
+    # 下载USD/CNY汇率历史 + VIX恐慌指数
     try:
         fx_hist = yf.download('CNY=X', start=str(start), end=str(today + timedelta(days=1)), progress=False)
         fx_close = fx_hist['Close']
@@ -312,6 +283,14 @@ def backtest(start_date='2026-03-01'):
         fx_close = fx_close.ffill()  # 假期用前一个交易日汇率
     except Exception:
         fx_close = None
+    try:
+        vix_hist = yf.download('^VIX', start=str(start), end=str(today + timedelta(days=1)), progress=False)
+        vix_close = vix_hist['Close']
+        if hasattr(vix_close, 'columns'):
+            vix_close = vix_close.iloc[:, 0]
+        vix_close = vix_close.ffill()
+    except Exception:
+        vix_close = None
     # 美股用原symbol，A股加 .SS 后缀用yfinance
     yf_symbols = list(US_SYMBOLS)
     a_share_map = {}  # '510300.SS' -> '510300'
@@ -350,7 +329,8 @@ def backtest(start_date='2026-03-01'):
         """获取某天的USD/CNY汇率"""
         if fx_close is None:
             return USD_CNY
-        for td in trading_dates:
+        fx_dates = sorted(fx_close.index)
+        for td in fx_dates:
             if td.date() >= target_date:
                 v = fx_close.loc[td]
                 if hasattr(v, 'item'):
@@ -358,6 +338,20 @@ def backtest(start_date='2026-03-01'):
                 if v == v:  # not NaN
                     return round(float(v), 4)
         return USD_CNY
+
+    def get_vix(target_date):
+        """获取某天的VIX恐慌指数"""
+        if vix_close is None:
+            return None
+        vix_dates = sorted(vix_close.index)
+        for td in vix_dates:
+            if td.date() >= target_date:
+                v = vix_close.loc[td]
+                if hasattr(v, 'item'):
+                    v = v.item()
+                if v == v:  # not NaN
+                    return round(float(v), 2)
+        return None
 
     # 执行 DCA
     for dca_d in dca_dates:
@@ -446,9 +440,10 @@ def backtest(start_date='2026-03-01'):
         except Exception:
             pass
 
-        # 临时修改 date.today() 不现实，直接传 prices 给 snapshot
-        # 需要改造 daily_snapshot 支持指定日期
-        _snapshot_for_date(td_date, prices)
+        # VIX
+        vix = get_vix(td_date)
+
+        _snapshot_for_date(td_date, prices, vix=vix)
 
     print("\n=== 回测完成 ===")
     # 读最终持仓
@@ -458,7 +453,7 @@ def backtest(start_date='2026-03-01'):
     print(f"最终持仓市值: ¥{total:,.0f}")
 
 
-def _snapshot_for_date(snap_date, prices):
+def _snapshot_for_date(snap_date, prices, vix=None):
     """为指定日期生成快照（回测用）"""
     positions = load_positions()
     if not positions:
@@ -520,46 +515,10 @@ def _snapshot_for_date(snap_date, prices):
     snapshot = {
         'date': str(snap_date), 'total_value': round(total, 2),
         'daily_return': daily_ret, 'cumulative_return': round(cum_ret, 4),
+        'vix': vix,
         'positions': detail,
     }
     (DATA / f'snapshot_{snap_date}.json').write_text(json.dumps(snapshot, indent=2, default=str))
-
-    # 追加到报告
-    performers = [(s, d['pnl_pct']) for s, d in detail.items() if s != 'CASH' and 'pnl_pct' in d]
-    best = max(performers, key=lambda x: x[1]) if performers else ('-', 0)
-    worst = min(performers, key=lambda x: x[1]) if performers else ('-', 0)
-
-    # 通胀调整（年化2%）
-    trades_f = DATA / 'trades.jsonl'
-    trade_dates = []
-    if trades_f.exists():
-        with open(trades_f) as f:
-            for line in f:
-                t = json.loads(line)
-                trade_dates.append(t['date'])
-    first_date = min(trade_dates) if trade_dates else str(snap_date)
-    days_held = (snap_date - date.fromisoformat(first_date)).days
-    inflation_adj = (1 + CPI_ANNUAL) ** (days_held / 365) - 1
-    real_ret = cum_ret - inflation_adj * 100
-
-    daily_sign = '+' if (daily_ret or 0) >= 0 else ''
-    cum_sign = '+' if cum_ret >= 0 else ''
-    real_sign = '+' if real_ret >= 0 else ''
-    row = f"| {snap_date} | ¥{total:,.0f} | ¥{total_deposited:,.0f} | {cum_sign}{cum_ret:.2f}% | {real_sign}{real_ret:.2f}% | {daily_sign}{daily_ret or 0:.2f}% | {best[0]} {best[1]:+.1f}% | {worst[0]} {worst[1]:+.1f}% |\n"
-
-    report_file = REPORT / 'portfolio.md'
-    if report_file.exists():
-        content = report_file.read_text()
-    else:
-        content = "# 模拟组合日报\n\n| 日期 | 总市值 | 投入 | 累计收益 | 扣通胀 | 日收益 | 最佳 | 最差 |\n|------|--------|------|---------|--------|--------|------|------|\n"
-
-    lines = content.split('\n')
-    header_idx = next((i for i, l in enumerate(lines) if l.startswith('|------')), None)
-    if header_idx is not None:
-        lines.insert(header_idx + 1, row.rstrip())
-    else:
-        lines.append(row.rstrip())
-    report_file.write_text('\n'.join(lines))
 
 
 # ---- CLI ----
