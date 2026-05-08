@@ -1,0 +1,236 @@
+"""
+模拟投资组合追踪器
+配置和数据存储在 Central-Bank 仓库
+"""
+
+import json
+import sys
+from datetime import date, timedelta
+from pathlib import Path
+
+import requests
+
+# ---- 路径 ----
+
+def get_bank():
+    for p in [
+        Path(__file__).parent.parent / 'Central-Bank',
+        Path.home() / 'Downloads' / 'Central-Bank',
+        Path('../Central-Bank'),
+    ]:
+        if (p / 'portfolio_config.py').exists():
+            return p.resolve()
+    print("ERROR: Central-Bank not found")
+    sys.exit(1)
+
+BANK = get_bank()
+sys.path.insert(0, str(BANK))
+from portfolio_config import ALLOCATION, ASSET_CLASS, US_SYMBOLS, A_SHARE_SYMBOLS, CRYPTO_SYMBOLS, USD_CNY, MONTHLY_INVESTMENT
+
+DATA = BANK / 'data' / 'portfolio'
+DATA.mkdir(parents=True, exist_ok=True)
+REPORT = BANK / 'reports' / 'portfolio'
+REPORT.mkdir(parents=True, exist_ok=True)
+
+# ---- 价格 ----
+
+def fetch_prices():
+    all_prices = {}
+
+    # 美股
+    try:
+        import yfinance as yf
+        for sym in US_SYMBOLS:
+            try:
+                d = yf.download(sym, period='5d', progress=False)
+                close = d['Close']
+                # yfinance v0.2+ returns DataFrame for single tickers
+                if hasattr(close, 'columns'):
+                    close = close.iloc[:, 0]
+                val = float(close.dropna().iloc[-1].item() if hasattr(close.dropna().iloc[-1], 'item') else close.dropna().iloc[-1])
+                all_prices[sym] = round(val * USD_CNY, 2)
+            except Exception as e:
+                print(f"  {sym}: {e}")
+    except ImportError:
+        print("  yfinance not installed")
+
+    # A股
+    try:
+        import akshare as ak
+        df = ak.fund_etf_spot_em()
+        for sym in A_SHARE_SYMBOLS:
+            row = df[df['代码'] == sym]
+            if not row.empty:
+                all_prices[sym] = round(float(row.iloc[0]['最新价']), 4)
+    except Exception:
+        pass
+
+    # BTC
+    try:
+        ids = ','.join(CRYPTO_SYMBOLS.values())
+        r = requests.get(f'https://api.coingecko.com/api/v3/simple/price?ids={ids}&vs_currencies=usd', timeout=10)
+        for sym, cg_id in CRYPTO_SYMBOLS.items():
+            if cg_id in r.json():
+                all_prices[sym] = round(r.json()[cg_id]['usd'] * USD_CNY, 2)
+    except Exception:
+        pass
+
+    print(f"Prices: {len(all_prices)} symbols")
+    return all_prices
+
+# ---- 持仓（存在 Central-Bank） ----
+
+def load_positions():
+    f = DATA / 'positions.json'
+    if f.exists():
+        return json.loads(f.read_text())
+    return {}
+
+def save_positions(positions):
+    (DATA / 'positions.json').write_text(json.dumps(positions, indent=2, default=str))
+
+# ---- 定投 ----
+
+def simulate_dca(amount=None, prices=None, trade_date=None):
+    if amount is None:
+        amount = MONTHLY_INVESTMENT
+    if prices is None:
+        prices = fetch_prices()
+    if trade_date is None:
+        trade_date = str(date.today())
+
+    print(f"\nDCA: ¥{amount:,.0f} on {trade_date}")
+    positions = load_positions()
+    trades = []
+
+    skipped_amount = 0
+    for symbol, ratio in ALLOCATION.items():
+        if symbol == 'CASH':
+            continue
+        target = amount * ratio
+        price = prices.get(symbol)
+        if not price or price <= 0:
+            print(f"  SKIP {symbol} (no price, ¥{target:,.0f} → cash)")
+            skipped_amount += target
+            continue
+
+        shares = target / price
+        old = positions.get(symbol, {'shares': 0, 'avg_cost': 0})
+        old_s, old_c = float(old['shares']), float(old['avg_cost'])
+        new_s = old_s + shares
+        new_c = (old_s * old_c + shares * price) / new_s if new_s > 0 else 0
+
+        positions[symbol] = {
+            'asset_class': ASSET_CLASS.get(symbol, 'unknown'),
+            'shares': round(new_s, 6),
+            'avg_cost': round(new_c, 4),
+        }
+        trades.append({'symbol': symbol, 'shares': round(shares, 6), 'price': round(price, 2), 'amount': round(target, 2), 'date': trade_date})
+        print(f"  BUY {symbol}: {shares:.4f} @ ¥{price:.2f} = ¥{target:,.0f}")
+
+    # 现金（含未买到的钱）
+    cash = amount * ALLOCATION.get('CASH', 0) + skipped_amount
+    old_cash = float(positions.get('CASH', {}).get('shares', 0))
+    positions['CASH'] = {'asset_class': 'cash', 'shares': round(old_cash + cash, 2), 'avg_cost': 1.0}
+
+    save_positions(positions)
+
+    # 交易记录追加
+    trades_file = DATA / 'trades.jsonl'
+    with open(trades_file, 'a') as f:
+        for t in trades:
+            f.write(json.dumps(t, ensure_ascii=False) + '\n')
+
+    return trades
+
+# ---- 每日快照 + 报告 ----
+
+def daily_snapshot(prices=None):
+    if prices is None:
+        prices = fetch_prices()
+
+    positions = load_positions()
+    if not positions:
+        print("No positions. Run: python portfolio.py dca")
+        return
+
+    today = str(date.today())
+    detail = {}
+    total = 0
+
+    for sym, pos in positions.items():
+        shares = float(pos['shares'])
+        avg_cost = float(pos.get('avg_cost', 0))
+        if sym == 'CASH':
+            detail[sym] = {'shares': shares, 'value': shares, 'pnl': 0}
+            # cash not added to invested total, but added to portfolio total
+            total += shares
+            continue
+        price = prices.get(sym)
+        if not price:
+            continue
+        value = shares * price
+        cost = shares * avg_cost
+        pnl = value - cost
+        pnl_pct = (pnl / cost * 100) if cost > 0 else 0
+        detail[sym] = {'shares': round(shares, 4), 'price': price, 'value': round(value, 2), 'pnl': round(pnl, 2), 'pnl_pct': round(pnl_pct, 2)}
+        total += value
+
+    total_invested = sum(float(p['shares']) * float(p.get('avg_cost', 0)) for s, p in positions.items() if s != 'CASH')
+    total_invested += float(positions.get('CASH', {}).get('shares', 0))
+    cum_ret = ((total - total_invested) / total_invested * 100) if total_invested > 0 else 0
+
+    # 日收益（读前一日快照）
+    daily_ret = None
+    yesterday = str(date.today() - timedelta(days=1))
+    prev_file = DATA / f'snapshot_{yesterday}.json'
+    if prev_file.exists():
+        prev = json.loads(prev_file.read_text())
+        daily_ret = round((total - prev['total_value']) / prev['total_value'] * 100, 4)
+
+    snapshot = {
+        'date': today, 'total_value': round(total, 2),
+        'daily_return': daily_ret, 'cumulative_return': round(cum_ret, 4),
+        'positions': detail,
+    }
+    (DATA / f'snapshot_{today}.json').write_text(json.dumps(snapshot, indent=2, default=str))
+
+    # 找今日最佳和最差
+    performers = [(s, d['pnl_pct']) for s, d in detail.items() if s != 'CASH' and 'pnl_pct' in d]
+    best = max(performers, key=lambda x: x[1]) if performers else ('-', 0)
+    worst = min(performers, key=lambda x: x[1]) if performers else ('-', 0)
+
+    # 追加到报告
+    daily_sign = '+' if (daily_ret or 0) >= 0 else ''
+    cum_sign = '+' if cum_ret >= 0 else ''
+    row = f"| {today} | ¥{total:,.0f} | {cum_sign}{cum_ret:.2f}% | {daily_sign}{daily_ret or 0:.2f}% | {best[0]} {best[1]:+.1f}% | {worst[0]} {worst[1]:+.1f}% |\n"
+
+    report_file = REPORT / 'portfolio.md'
+    if report_file.exists():
+        content = report_file.read_text()
+    else:
+        content = "# 模拟组合日报\n\n| 日期 | 总市值 | 累计收益 | 日收益 | 最佳 | 最差 |\n|------|--------|---------|--------|------|------|\n"
+
+    # 插入到表头之后
+    lines = content.split('\n')
+    header_idx = next(i for i, l in enumerate(lines) if l.startswith('|------'))
+    lines.insert(header_idx + 1, row.rstrip())
+    report_file.write_text('\n'.join(lines))
+
+    print(f"\nSnapshot {today}: ¥{total:,.0f} | cum:{cum_sign}{cum_ret:.2f}% | daily:{daily_sign}{daily_ret or 0:.2f}%")
+    print(f"  Best: {best[0]} {best[1]:+.1f}% | Worst: {worst[0]} {worst[1]:+.1f}%")
+
+# ---- CLI ----
+
+if __name__ == '__main__':
+    cmd = sys.argv[1] if len(sys.argv) > 1 else ''
+    if cmd == 'snapshot':
+        daily_snapshot()
+    elif cmd == 'dca':
+        simulate_dca()
+        daily_snapshot()  # DCA 后顺便快照
+    elif cmd == 'backfill':
+        from portfolio import backfill_history
+        backfill_history()
+    else:
+        print("Usage: python portfolio.py [snapshot|dca]")
