@@ -97,4 +97,4 @@ GitHub → Actions → 选择 workflow → Run workflow
 - **Runner**: GitHub Actions (`ubuntu-latest`)
 - **Engine**: Python 3.9
 - **Mode**: Automated Schedule (每 2 小时)
-    * **Last Updated**: 2026-05-07
+    * **Last Updated**: 2026-05-08
