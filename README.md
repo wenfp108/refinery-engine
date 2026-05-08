@@ -7,7 +7,7 @@
 ```
 ┌─────────────────────────────────────────────────────┐
 │                   GitHub Actions                     │
-│              (每 2 小时定时触发)                       │
+│              (每小时定时触发)                          │
 └──────────┬──────────────┬──────────────┬────────────┘
            │              │              │
      ┌─────▼─────┐  ┌────▼────┐  ┌─────▼─────┐
@@ -46,26 +46,22 @@
 | Reddit | score × vibe | 30 |
 | Polymarket | 策略标签 + 流动性 | 80 |
 
-## 新闻监控
+## 模拟投资组合
 
-集成 [NewsNow](https://github.com/wenfp108/newsnow) 数据源，每日自动监控：
+`portfolio.py` — 12 资产 DCA 模拟盘，每日快照，AI 可读。
 
-| 数据源 | 类型 | 更新频率 |
-|--------|------|---------|
-| 经济学人 | 国际新闻 | 慢 |
-| 纽约时报 | 国际新闻 | 中 |
-| 金融时报 | 财经新闻 | 中 |
-| GitHub Trending | 科技 | 快 |
-| Hacker News | 科技 | 中 |
-| 华尔街见闻 | 财经 | 快 |
-| 金十数据 | 财经 | 快 |
-
-运行新闻监控：
 ```bash
-python news_monitor.py
+python portfolio.py init      # 首次买入
+python portfolio.py dca       # 每月定投
+python portfolio.py snapshot  # 记录当日快照
+python portfolio.py backtest  # 回测（默认从2026-03-01）
 ```
 
-统计数据保存在 `news_stats.json`，保留最近 30 天记录。
+快照数据存储在 `Central-Bank/data/portfolio/`，包含 VIX 恐慌指数、动态汇率、通胀调整。
+
+## 战报
+
+每小时自动生成情报审计报告，保留最近 7 天，自动清理旧文件。
 
 ## 配置
 
@@ -96,5 +92,5 @@ GitHub → Actions → 选择 workflow → Run workflow
 
 - **Runner**: GitHub Actions (`ubuntu-latest`)
 - **Engine**: Python 3.9
-- **Mode**: Automated Schedule (每 2 小时)
+- **Mode**: Automated Schedule (每小时)
     * **Last Updated**: 2026-05-08
