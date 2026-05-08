@@ -245,7 +245,7 @@ class UniversalFactory:
                         results.append(json.dumps({
                             "ref_id": ref_id, "topic_id": topic_id, "master": name,
                             "drift": "[DRIFT_DETECTED]" in o,
-                            "source": source, "thought": t, "output": o
+                            "source": source, "input": content, "thought": t, "output": o
                         }, ensure_ascii=False))
             except Exception as e:
                 print(f"   ⚠️ Master {name} 审计异常 (topic={topic_id}): {e}")
