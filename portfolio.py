@@ -25,7 +25,7 @@ def get_bank():
 
 BANK = get_bank()
 sys.path.insert(0, str(BANK))
-from portfolio_config import ALLOCATION, ASSET_CLASS, US_SYMBOLS, A_SHARE_SYMBOLS, CRYPTO_SYMBOLS, USD_CNY, MONTHLY_INVESTMENT
+from portfolio_config import ALLOCATION, ASSET_CLASS, US_SYMBOLS, A_SHARE_SYMBOLS, CRYPTO_SYMBOLS, USD_CNY, MONTHLY_INVESTMENT, INITIAL_CAPITAL
 
 DATA = BANK / 'data' / 'portfolio'
 DATA.mkdir(parents=True, exist_ok=True)
@@ -176,9 +176,12 @@ def daily_snapshot(prices=None):
         detail[sym] = {'shares': round(shares, 4), 'price': price, 'value': round(value, 2), 'pnl': round(pnl, 2), 'pnl_pct': round(pnl_pct, 2)}
         total += value
 
-    total_invested = sum(float(p['shares']) * float(p.get('avg_cost', 0)) for s, p in positions.items() if s != 'CASH')
-    total_invested += float(positions.get('CASH', {}).get('shares', 0))
-    cum_ret = ((total - total_invested) / total_invested * 100) if total_invested > 0 else 0
+    # 累计收益 = (当前市值 - 总投入) / 总投入
+    # 总投入 = 所有持仓的成本 + 现金
+    cost_basis = sum(float(p['shares']) * float(p.get('avg_cost', 0)) for s, p in positions.items() if s != 'CASH')
+    cash_total = float(positions.get('CASH', {}).get('shares', 0))
+    total_deposited = cost_basis + cash_total
+    cum_ret = ((total - total_deposited) / total_deposited * 100) if total_deposited > 0 else 0
 
     # 日收益（读前一日快照）
     daily_ret = None
@@ -226,11 +229,16 @@ if __name__ == '__main__':
     cmd = sys.argv[1] if len(sys.argv) > 1 else ''
     if cmd == 'snapshot':
         daily_snapshot()
+    elif cmd == 'init':
+        # 初始资金一次性买入
+        simulate_dca(amount=INITIAL_CAPITAL, trade_date=str(date.today()))
+        daily_snapshot()
     elif cmd == 'dca':
-        simulate_dca()
-        daily_snapshot()  # DCA 后顺便快照
-    elif cmd == 'backfill':
-        from portfolio import backfill_history
-        backfill_history()
+        # 每月定投
+        simulate_dca(amount=MONTHLY_INVESTMENT, trade_date=str(date.today()))
+        daily_snapshot()
     else:
-        print("Usage: python portfolio.py [snapshot|dca]")
+        print("Usage: python portfolio.py [init|dca|snapshot]")
+        print("  init     - 初始资金一次性买入")
+        print("  dca      - 每月定投买入")
+        print("  snapshot - 记录当日快照")
