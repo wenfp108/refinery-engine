@@ -5,7 +5,7 @@
 
 import json
 import sys
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import requests
@@ -223,6 +223,194 @@ def daily_snapshot(prices=None):
     print(f"\nSnapshot {today}: ¥{total:,.0f} | cum:{cum_sign}{cum_ret:.2f}% | daily:{daily_sign}{daily_ret or 0:.2f}%")
     print(f"  Best: {best[0]} {best[1]:+.1f}% | Worst: {worst[0]} {worst[1]:+.1f}%")
 
+# ---- 回测 ----
+
+def backtest(start_date='2026-03-01'):
+    """从指定日期开始回测，每月1号DCA，每日生成快照"""
+    import yfinance as yf
+
+    start = datetime.strptime(start_date, '%Y-%m-%d').date()
+    today = date.today()
+
+    # 清空持仓和快照，从零开始
+    (DATA / 'positions.json').write_text('{}')
+    for f in DATA.glob('snapshot_*.json'):
+        f.unlink()
+    # 清空交易记录
+    trades_file = DATA / 'trades.jsonl'
+    if trades_file.exists():
+        trades_file.unlink()
+
+    print(f"=== 回测从 {start} 到 {today} ===")
+
+    # 批量下载美股历史数据
+    print("下载历史价格...")
+    hist = yf.download(US_SYMBOLS, start=str(start), end=str(today + timedelta(days=1)), progress=False)
+    close_df = hist['Close']
+    # 如果只有单个ticker，yfinance可能返回Series
+    if isinstance(close_df, type(hist)):
+        pass  # already DataFrame
+    trading_dates = sorted(close_df.index)
+
+    # DCA 日期：每月1号（或最近的交易日）
+    dca_dates = []
+    d = start.replace(day=1)
+    while d <= today:
+        # 找到 >= d 的最近交易日
+        for td in trading_dates:
+            if td.date() >= d:
+                dca_dates.append(td.date())
+                break
+        # 下个月
+        if d.month == 12:
+            d = d.replace(year=d.year + 1, month=1)
+        else:
+            d = d.replace(month=d.month + 1)
+
+    print(f"DCA 日期: {dca_dates}")
+    print(f"交易日数: {len(trading_dates)}")
+
+    # 执行 DCA
+    for dca_d in dca_dates:
+        # 获取当天价格
+        prices = {}
+        for sym in US_SYMBOLS:
+            try:
+                row = close_df[sym] if sym in close_df.columns else close_df
+                # 找最近的交易日
+                for td in trading_dates:
+                    if td.date() <= dca_d:
+                        val = row.loc[td]
+                    if td.date() >= dca_d:
+                        val = row.loc[td]
+                        break
+                if hasattr(val, 'item'):
+                    val = val.item()
+                prices[sym] = round(float(val) * USD_CNY, 2)
+            except Exception:
+                pass
+        # BTC
+        try:
+            ids = ','.join(CRYPTO_SYMBOLS.values())
+            r = requests.get(f'https://api.coingecko.com/api/v3/simple/price?ids={ids}&vs_currencies=usd&date={dca_d.strftime("%d-%m-%Y")}', timeout=10)
+            for sym, cg_id in CRYPTO_SYMBOLS.items():
+                if cg_id in r.json():
+                    prices[sym] = round(r.json()[cg_id]['usd'] * USD_CNY, 2)
+        except Exception:
+            pass
+
+        # 用 INITIAL_CAPITAL 作为首次，之后用 MONTHLY_INVESTMENT
+        amount = INITIAL_CAPITAL if dca_d == dca_dates[0] else MONTHLY_INVESTMENT
+        print(f"\n--- DCA {dca_d}: ¥{amount:,.0f} ---")
+        simulate_dca(amount=amount, prices=prices, trade_date=str(dca_d))
+
+    # 生成每日快照（用历史收盘价）
+    print(f"\n--- 生成每日快照 ---")
+    for td in trading_dates:
+        td_date = td.date() if hasattr(td, 'date') else td
+        if td_date < start:
+            continue
+        prices = {}
+        for sym in US_SYMBOLS:
+            try:
+                val = close_df[sym].loc[td]
+                if hasattr(val, 'item'):
+                    val = val.item()
+                prices[sym] = round(float(val) * USD_CNY, 2)
+            except Exception:
+                pass
+        # BTC（用当天价格）
+        try:
+            ids = ','.join(CRYPTO_SYMBOLS.values())
+            r = requests.get(f'https://api.coingecko.com/api/v3/simple/price?ids={ids}&vs_currencies=usd', timeout=10)
+            for sym, cg_id in CRYPTO_SYMBOLS.items():
+                if cg_id in r.json():
+                    prices[sym] = round(r.json()[cg_id]['usd'] * USD_CNY, 2)
+        except Exception:
+            pass
+
+        # 临时修改 date.today() 不现实，直接传 prices 给 snapshot
+        # 需要改造 daily_snapshot 支持指定日期
+        _snapshot_for_date(td_date, prices)
+
+    print("\n=== 回测完成 ===")
+    # 读最终持仓
+    positions = load_positions()
+    total = sum(float(p['shares']) * float(p.get('avg_cost', 0)) for s, p in positions.items() if s != 'CASH')
+    total += float(positions.get('CASH', {}).get('shares', 0))
+    print(f"最终持仓市值: ¥{total:,.0f}")
+
+
+def _snapshot_for_date(snap_date, prices):
+    """为指定日期生成快照（回测用）"""
+    positions = load_positions()
+    if not positions:
+        return
+
+    detail = {}
+    total = 0
+
+    for sym, pos in positions.items():
+        shares = float(pos['shares'])
+        avg_cost = float(pos.get('avg_cost', 0))
+        if sym == 'CASH':
+            detail[sym] = {'shares': shares, 'value': shares, 'pnl': 0}
+            total += shares
+            continue
+        price = prices.get(sym)
+        if not price:
+            continue
+        value = shares * price
+        cost = shares * avg_cost
+        pnl = value - cost
+        pnl_pct = (pnl / cost * 100) if cost > 0 else 0
+        detail[sym] = {'shares': round(shares, 4), 'price': price, 'value': round(value, 2), 'pnl': round(pnl, 2), 'pnl_pct': round(pnl_pct, 2)}
+        total += value
+
+    cost_basis = sum(float(p['shares']) * float(p.get('avg_cost', 0)) for s, p in positions.items() if s != 'CASH')
+    cash_total = float(positions.get('CASH', {}).get('shares', 0))
+    total_deposited = cost_basis + cash_total
+    cum_ret = ((total - total_deposited) / total_deposited * 100) if total_deposited > 0 else 0
+
+    # 日收益
+    daily_ret = None
+    prev_file = DATA / f'snapshot_{snap_date - timedelta(days=1)}.json'
+    # 向前找最近的快照
+    for i in range(1, 10):
+        pf = DATA / f'snapshot_{snap_date - timedelta(days=i)}.json'
+        if pf.exists():
+            prev = json.loads(pf.read_text())
+            daily_ret = round((total - prev['total_value']) / prev['total_value'] * 100, 4)
+            break
+
+    snapshot = {
+        'date': str(snap_date), 'total_value': round(total, 2),
+        'daily_return': daily_ret, 'cumulative_return': round(cum_ret, 4),
+        'positions': detail,
+    }
+    (DATA / f'snapshot_{snap_date}.json').write_text(json.dumps(snapshot, indent=2, default=str))
+
+    # 追加到报告
+    performers = [(s, d['pnl_pct']) for s, d in detail.items() if s != 'CASH' and 'pnl_pct' in d]
+    best = max(performers, key=lambda x: x[1]) if performers else ('-', 0)
+    worst = min(performers, key=lambda x: x[1]) if performers else ('-', 0)
+
+    daily_sign = '+' if (daily_ret or 0) >= 0 else ''
+    cum_sign = '+' if cum_ret >= 0 else ''
+    row = f"| {snap_date} | ¥{total:,.0f} | {cum_sign}{cum_ret:.2f}% | {daily_sign}{daily_ret or 0:.2f}% | {best[0]} {best[1]:+.1f}% | {worst[0]} {worst[1]:+.1f}% |\n"
+
+    report_file = REPORT / 'portfolio.md'
+    if report_file.exists():
+        content = report_file.read_text()
+    else:
+        content = "# 模拟组合日报\n\n| 日期 | 总市值 | 累计收益 | 日收益 | 最佳 | 最差 |\n|------|--------|---------|--------|------|------|\n"
+
+    lines = content.split('\n')
+    header_idx = next(i for i, l in enumerate(lines) if l.startswith('|------'))
+    lines.insert(header_idx + 1, row.rstrip())
+    report_file.write_text('\n'.join(lines))
+
+
 # ---- CLI ----
 
 if __name__ == '__main__':
@@ -237,8 +425,12 @@ if __name__ == '__main__':
         # 每月定投
         simulate_dca(amount=MONTHLY_INVESTMENT, trade_date=str(date.today()))
         daily_snapshot()
+    elif cmd == 'backtest':
+        start = sys.argv[2] if len(sys.argv) > 2 else '2026-03-01'
+        backtest(start)
     else:
-        print("Usage: python portfolio.py [init|dca|snapshot]")
-        print("  init     - 初始资金一次性买入")
-        print("  dca      - 每月定投买入")
-        print("  snapshot - 记录当日快照")
+        print("Usage: python portfolio.py [init|dca|snapshot|backtest]")
+        print("  init      - 初始资金一次性买入")
+        print("  dca       - 每月定投买入")
+        print("  snapshot  - 记录当日快照")
+        print("  backtest  - 回测（默认从2026-03-01开始）")
