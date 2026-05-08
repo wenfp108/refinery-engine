@@ -245,11 +245,16 @@ def backtest(start_date='2026-03-01'):
 
     # 批量下载美股历史数据
     print("下载历史价格...")
-    hist = yf.download(US_SYMBOLS, start=str(start), end=str(today + timedelta(days=1)), progress=False)
+    # 美股用原symbol，A股加 .SS 后缀用yfinance
+    yf_symbols = list(US_SYMBOLS)
+    a_share_map = {}  # '510300.SS' -> '510300'
+    for sym in A_SHARE_SYMBOLS:
+        yf_sym = f'{sym}.SS'
+        yf_symbols.append(yf_sym)
+        a_share_map[yf_sym] = sym
+
+    hist = yf.download(yf_symbols, start=str(start), end=str(today + timedelta(days=1)), progress=False)
     close_df = hist['Close']
-    # 如果只有单个ticker，yfinance可能返回Series
-    if isinstance(close_df, type(hist)):
-        pass  # already DataFrame
     trading_dates = sorted(close_df.index)
 
     # DCA 日期：每月1号（或最近的交易日）
@@ -274,19 +279,34 @@ def backtest(start_date='2026-03-01'):
     for dca_d in dca_dates:
         # 获取当天价格
         prices = {}
-        for sym in US_SYMBOLS:
+        # 美股 + A股（统一从yfinance获取）
+        all_yf = list(US_SYMBOLS) + [f'{s}.SS' for s in A_SHARE_SYMBOLS]
+        for yf_sym in all_yf:
             try:
-                row = close_df[sym] if sym in close_df.columns else close_df
+                # 确定实际symbol和是否需要汇率转换
+                if yf_sym in a_share_map:
+                    sym = a_share_map[yf_sym]
+                    use_fx = False  # A股本身是人民币
+                else:
+                    sym = yf_sym
+                    use_fx = True
+
+                if yf_sym not in close_df.columns:
+                    continue
+                row = close_df[yf_sym]
                 # 找最近的交易日
+                val = None
                 for td in trading_dates:
-                    if td.date() <= dca_d:
-                        val = row.loc[td]
                     if td.date() >= dca_d:
-                        val = row.loc[td]
-                        break
-                if hasattr(val, 'item'):
-                    val = val.item()
-                prices[sym] = round(float(val) * USD_CNY, 2)
+                        v = row.loc[td]
+                        if hasattr(v, 'item'):
+                            v = v.item()
+                        if not (v != v):  # not NaN
+                            val = v
+                            break
+                if val is None:
+                    continue
+                prices[sym] = round(float(val) * USD_CNY, 2) if use_fx else round(float(val), 4)
             except Exception:
                 pass
         # BTC
@@ -311,12 +331,23 @@ def backtest(start_date='2026-03-01'):
         if td_date < start:
             continue
         prices = {}
-        for sym in US_SYMBOLS:
+        # 美股 + A股
+        for yf_sym in all_yf:
             try:
-                val = close_df[sym].loc[td]
+                if yf_sym in a_share_map:
+                    sym = a_share_map[yf_sym]
+                    use_fx = False
+                else:
+                    sym = yf_sym
+                    use_fx = True
+                if yf_sym not in close_df.columns:
+                    continue
+                val = close_df[yf_sym].loc[td]
                 if hasattr(val, 'item'):
                     val = val.item()
-                prices[sym] = round(float(val) * USD_CNY, 2)
+                if val != val:  # NaN
+                    continue
+                prices[sym] = round(float(val) * USD_CNY, 2) if use_fx else round(float(val), 4)
             except Exception:
                 pass
         # BTC（用当天价格）
