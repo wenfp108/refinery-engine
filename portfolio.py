@@ -255,6 +255,10 @@ def backtest(start_date='2026-03-01'):
 
     hist = yf.download(yf_symbols, start=str(start), end=str(today + timedelta(days=1)), progress=False)
     close_df = hist['Close']
+    # A股假期没数据，用前一个交易日的价格填充（避免快照跳水）
+    for yf_sym in a_share_map:
+        if yf_sym in close_df.columns:
+            close_df[yf_sym] = close_df[yf_sym].ffill()
     trading_dates = sorted(close_df.index)
 
     # DCA 日期：每月1号（或最近的交易日）
