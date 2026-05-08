@@ -37,6 +37,20 @@ REPORT.mkdir(parents=True, exist_ok=True)
 def fetch_prices():
     all_prices = {}
 
+    # 动态获取 USD/CNY 汇率
+    fx = USD_CNY
+    try:
+        import yfinance as yf
+        fx_data = yf.download('CNY=X', period='5d', progress=False)
+        fx_close = fx_data['Close']
+        if hasattr(fx_close, 'columns'):
+            fx_close = fx_close.iloc[:, 0]
+        fx_val = fx_close.dropna().iloc[-1]
+        fx = round(float(fx_val.item() if hasattr(fx_val, 'item') else fx_val), 4)
+        print(f"  USD/CNY: {fx}")
+    except Exception as e:
+        print(f"  USD/CNY 获取失败，用配置值 {USD_CNY}: {e}")
+
     # 美股
     try:
         import yfinance as yf
@@ -44,11 +58,10 @@ def fetch_prices():
             try:
                 d = yf.download(sym, period='5d', progress=False)
                 close = d['Close']
-                # yfinance v0.2+ returns DataFrame for single tickers
                 if hasattr(close, 'columns'):
                     close = close.iloc[:, 0]
                 val = float(close.dropna().iloc[-1].item() if hasattr(close.dropna().iloc[-1], 'item') else close.dropna().iloc[-1])
-                all_prices[sym] = round(val * USD_CNY, 2)
+                all_prices[sym] = round(val * fx, 2)
             except Exception as e:
                 print(f"  {sym}: {e}")
     except ImportError:
@@ -62,8 +75,10 @@ def fetch_prices():
             row = df[df['代码'] == sym]
             if not row.empty:
                 all_prices[sym] = round(float(row.iloc[0]['最新价']), 4)
-    except Exception:
-        pass
+            else:
+                print(f"  {sym}: A股价格未找到")
+    except Exception as e:
+        print(f"  A股价格获取失败: {e}")
 
     # BTC
     try:
@@ -71,9 +86,11 @@ def fetch_prices():
         r = requests.get(f'https://api.coingecko.com/api/v3/simple/price?ids={ids}&vs_currencies=usd', timeout=10)
         for sym, cg_id in CRYPTO_SYMBOLS.items():
             if cg_id in r.json():
-                all_prices[sym] = round(r.json()[cg_id]['usd'] * USD_CNY, 2)
-    except Exception:
-        pass
+                all_prices[sym] = round(r.json()[cg_id]['usd'] * fx, 2)
+            else:
+                print(f"  {sym}: CoinGecko 未返回数据")
+    except Exception as e:
+        print(f"  BTC价格获取失败: {e}")
 
     print(f"Prices: {len(all_prices)} symbols")
     return all_prices
@@ -158,17 +175,33 @@ def daily_snapshot(prices=None):
     detail = {}
     total = 0
 
+    # 从最近的快照获取缺失价格的后备数据
+    fallback_prices = {}
+    for i in range(1, 11):
+        prev_file = DATA / f'snapshot_{date.today() - timedelta(days=i)}.json'
+        if prev_file.exists():
+            prev = json.loads(prev_file.read_text())
+            for sym, d in prev.get('positions', {}).items():
+                if 'price' in d and sym not in fallback_prices:
+                    fallback_prices[sym] = d['price']
+            break
+
     for sym, pos in positions.items():
         shares = float(pos['shares'])
         avg_cost = float(pos.get('avg_cost', 0))
         if sym == 'CASH':
             detail[sym] = {'shares': shares, 'value': shares, 'pnl': 0}
-            # cash not added to invested total, but added to portfolio total
             total += shares
             continue
         price = prices.get(sym)
         if not price:
-            continue
+            # 用前一次快照的价格，避免周末/假期导致资产"消失"
+            price = fallback_prices.get(sym)
+            if price:
+                print(f"  {sym}: 用前次快照价格 ¥{price}")
+            else:
+                print(f"  {sym}: 无价格数据，跳过")
+                continue
         value = shares * price
         cost = shares * avg_cost
         pnl = value - cost
@@ -183,13 +216,14 @@ def daily_snapshot(prices=None):
     total_deposited = cost_basis + cash_total
     cum_ret = ((total - total_deposited) / total_deposited * 100) if total_deposited > 0 else 0
 
-    # 日收益（读前一日快照）
+    # 日收益（向前找最近的快照，最多10天，兼容周末/假期）
     daily_ret = None
-    yesterday = str(date.today() - timedelta(days=1))
-    prev_file = DATA / f'snapshot_{yesterday}.json'
-    if prev_file.exists():
-        prev = json.loads(prev_file.read_text())
-        daily_ret = round((total - prev['total_value']) / prev['total_value'] * 100, 4)
+    for i in range(1, 11):
+        prev_file = DATA / f'snapshot_{date.today() - timedelta(days=i)}.json'
+        if prev_file.exists():
+            prev = json.loads(prev_file.read_text())
+            daily_ret = round((total - prev['total_value']) / prev['total_value'] * 100, 4)
+            break
 
     snapshot = {
         'date': today, 'total_value': round(total, 2),
@@ -203,15 +237,9 @@ def daily_snapshot(prices=None):
     best = max(performers, key=lambda x: x[1]) if performers else ('-', 0)
     worst = min(performers, key=lambda x: x[1]) if performers else ('-', 0)
 
-    # 通胀调整（年化2%）
+    # 通胀调整（年化CPI）
     # 找第一天有持仓的日期，计算天数
     trade_dates = []
-    for t_file in sorted(DATA.glob('trades.jsonl')):
-        with open(t_file) as f:
-            for line in f:
-                t = json.loads(line)
-                trade_dates.append(t['date'])
-    # 从trades.jsonl读所有交易日期
     trades_f = DATA / 'trades.jsonl'
     if trades_f.exists():
         with open(trades_f) as f:
@@ -238,8 +266,11 @@ def daily_snapshot(prices=None):
 
     # 插入到表头之后
     lines = content.split('\n')
-    header_idx = next(i for i, l in enumerate(lines) if l.startswith('|------'))
-    lines.insert(header_idx + 1, row.rstrip())
+    header_idx = next((i for i, l in enumerate(lines) if l.startswith('|------')), None)
+    if header_idx is not None:
+        lines.insert(header_idx + 1, row.rstrip())
+    else:
+        lines.append(row.rstrip())
     report_file.write_text('\n'.join(lines))
 
     print(f"\nSnapshot {today}: ¥{total:,.0f} | cum:{cum_sign}{cum_ret:.2f}% | daily:{daily_sign}{daily_ret or 0:.2f}%")
@@ -431,6 +462,17 @@ def _snapshot_for_date(snap_date, prices):
     detail = {}
     total = 0
 
+    # 从最近的快照获取缺失价格的后备数据
+    fallback_prices = {}
+    for i in range(1, 11):
+        pf = DATA / f'snapshot_{snap_date - timedelta(days=i)}.json'
+        if pf.exists():
+            prev = json.loads(pf.read_text())
+            for sym, d in prev.get('positions', {}).items():
+                if 'price' in d and sym not in fallback_prices:
+                    fallback_prices[sym] = d['price']
+            break
+
     for sym, pos in positions.items():
         shares = float(pos['shares'])
         avg_cost = float(pos.get('avg_cost', 0))
@@ -440,7 +482,9 @@ def _snapshot_for_date(snap_date, prices):
             continue
         price = prices.get(sym)
         if not price:
-            continue
+            price = fallback_prices.get(sym)
+            if not price:
+                continue
         value = shares * price
         cost = shares * avg_cost
         pnl = value - cost
@@ -501,8 +545,11 @@ def _snapshot_for_date(snap_date, prices):
         content = "# 模拟组合日报\n\n| 日期 | 总市值 | 投入 | 累计收益 | 扣通胀 | 日收益 | 最佳 | 最差 |\n|------|--------|------|---------|--------|--------|------|------|\n"
 
     lines = content.split('\n')
-    header_idx = next(i for i, l in enumerate(lines) if l.startswith('|------'))
-    lines.insert(header_idx + 1, row.rstrip())
+    header_idx = next((i for i, l in enumerate(lines) if l.startswith('|------')), None)
+    if header_idx is not None:
+        lines.insert(header_idx + 1, row.rstrip())
+    else:
+        lines.append(row.rstrip())
     report_file.write_text('\n'.join(lines))
 
 
