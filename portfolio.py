@@ -18,13 +18,13 @@ def get_bank():
         Path.home() / 'Downloads' / 'Central-Bank',
         Path('../Central-Bank'),
     ]:
-        if (p / 'portfolio_config.py').exists():
+        if (p / 'data' / 'portfolio' / 'portfolio_config.py').exists():
             return p.resolve()
     print("ERROR: Central-Bank not found")
     sys.exit(1)
 
 BANK = get_bank()
-sys.path.insert(0, str(BANK))
+sys.path.insert(0, str(BANK / 'data' / 'portfolio'))
 from portfolio_config import ALLOCATION, ASSET_CLASS, US_SYMBOLS, A_SHARE_SYMBOLS, CRYPTO_SYMBOLS, USD_CNY, MONTHLY_INVESTMENT, INITIAL_CAPITAL
 
 DATA = BANK / 'data' / 'portfolio'
