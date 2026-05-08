@@ -225,6 +225,11 @@ def daily_snapshot(prices=None):
             daily_ret = round((total - prev['total_value']) / prev['total_value'] * 100, 4)
             break
 
+    # 防呆：日收益超过±20%大概率是数据异常
+    if daily_ret is not None and abs(daily_ret) > 20:
+        print(f"  ⚠️ 日收益 {daily_ret:+.2f}% 异常！可能是价格数据缺失，跳过本次快照")
+        return
+
     snapshot = {
         'date': today, 'total_value': round(total, 2),
         'daily_return': daily_ret, 'cumulative_return': round(cum_ret, 4),
@@ -507,6 +512,10 @@ def _snapshot_for_date(snap_date, prices):
             prev = json.loads(pf.read_text())
             daily_ret = round((total - prev['total_value']) / prev['total_value'] * 100, 4)
             break
+
+    # 防呆：日收益超过±20%大概率是数据异常
+    if daily_ret is not None and abs(daily_ret) > 20:
+        return
 
     snapshot = {
         'date': str(snap_date), 'total_value': round(total, 2),
