@@ -2,7 +2,7 @@ name: 🚀 Daily Heartbeat (Anti-Suspension)
 
 on:
   schedule:
-    - cron: '0 0 * * *' # 每天北京时间早 8 点
+    - cron: '0 0 * * *' # UTC 00:00 = 北京时间 08:00
   workflow_dispatch:   # 支持手动触发
 
 permissions:
@@ -14,13 +14,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: 🛡️ 稳健打卡 (Python 版)
+      - name: 🛡️ 稳健打卡
         run: |
-          # 1. 设置身份
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          
-          # 2. 用 Python 进行物理替换，100% 解决星号匹配问题
+
           python3 -c "
           import datetime, os
           filename = 'README.md'
@@ -29,14 +27,139 @@ jobs:
                   lines = f.readlines()
               with open(filename, 'w', encoding='utf-8') as f:
                   for line in lines:
-                      # 只要这行包含 Last Updated，就强制重写整行
                       if 'Last Updated' in line:
                           f.write(f'    * **Last Updated**: {datetime.date.today()}\n')
                       else:
                           f.write(line)
           "
-          
-          # 3. 提交并推送
+
           git add README.md
           git commit -m "chore: daily heartbeat [skip ci]" || echo "No changes"
           git push
+
+      - name: 📂 数据目录重组 (仅昨天)
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+          python3 << 'PYEOF'
+          import os
+          import subprocess
+          from datetime import datetime, timedelta, timezone
+
+          # ============================================================
+          # 数据目录重组脚本
+          # 将 flat date 结构 (2026-05-08) 迁移到层级结构 (2026/05/08)
+          # ============================================================
+          #
+          # 安全措施:
+          #   1. 只处理昨天的数据，不碰今天和未来
+          #   2. 使用 git mv（不是 rm + add），保留 git 历史
+          #   3. 预检查目标路径不存在，避免覆盖
+          #   4. 任何 git mv 失败立即中止，不提交
+          #   5. 全部成功才 commit + push
+          #   6. 完整日志记录所有操作
+          # ============================================================
+
+          bj_now = datetime.now(timezone(timedelta(hours=8)))
+          yesterday = bj_now - timedelta(days=1)
+          yesterday_str = yesterday.strftime('%Y-%m-%d')
+          y = yesterday.strftime('%Y')
+          m = yesterday.strftime('%m')
+          d = yesterday.strftime('%d')
+
+          print(f"📅 重组目标日期: {yesterday_str} → {y}/{m}/{d}")
+
+          migrated = 0
+          errors = []
+
+          def git_mv(src, dst):
+              """安全移动：预检查 + git mv"""
+              if os.path.exists(dst):
+                  print(f"  ⚠️ 目标已存在，跳过: {dst}")
+                  return False
+              os.makedirs(os.path.dirname(dst), exist_ok=True)
+              result = subprocess.run(
+                  ['git', 'mv', src, dst],
+                  capture_output=True, text=True
+              )
+              if result.returncode != 0:
+                  err = f"git mv 失败: {src} → {dst}: {result.stderr.strip()}"
+                  errors.append(err)
+                  print(f"  ❌ {err}")
+                  return False
+              print(f"  ✅ {src} → {dst}")
+              return True
+
+          # === 1. Papers ===
+          src_dir = f"papers/global/{yesterday_str}"
+          if os.path.isdir(src_dir):
+              print(f"\n📄 Papers: {src_dir}")
+              dst_dir = f"papers/global/{y}/{m}/{d}"
+              for fname in sorted(os.listdir(src_dir)):
+                  if git_mv(f"{src_dir}/{fname}", f"{dst_dir}/{fname}"):
+                      migrated += 1
+              try:
+                  os.rmdir(src_dir)
+              except OSError:
+                  pass
+
+          # === 2. Polymarket ===
+          for sub in ['strategy', 'trends']:
+              src_dir = f"polymarket/{sub}/{yesterday_str}"
+              if not os.path.isdir(src_dir):
+                  continue
+              print(f"\n📊 Polymarket/{sub}: {src_dir}")
+              dst_dir = f"polymarket/{sub}/{y}/{m}/{d}"
+              for fname in sorted(os.listdir(src_dir)):
+                  if git_mv(f"{src_dir}/{fname}", f"{dst_dir}/{fname}"):
+                      migrated += 1
+              try:
+                  os.rmdir(src_dir)
+              except OSError:
+                  pass
+
+          # === 3. Twitter ===
+          src_file = f"twitter/{yesterday_str}.json"
+          if os.path.isfile(src_file):
+              print(f"\n🐦 Twitter: {src_file}")
+              dst_dir = f"twitter/{y}/{m}/{d}"
+              if git_mv(src_file, f"{dst_dir}/{yesterday_str}.json"):
+                  migrated += 1
+
+          # === 4. Reddit ===
+          month_dir = f"reddit/sentiment/{y}/{m}"
+          if os.path.isdir(month_dir):
+              print(f"\n📱 Reddit: {month_dir}")
+              dst_dir = f"reddit/sentiment/{y}/{m}/{d}"
+              for fname in sorted(os.listdir(month_dir)):
+                  fpath = os.path.join(month_dir, fname)
+                  if os.path.isfile(fpath):
+                      if git_mv(fpath, f"{dst_dir}/{fname}"):
+                          migrated += 1
+
+          # === 结果 ===
+          print(f"\n{'='*50}")
+          print(f"📊 总计: {migrated} 个文件")
+
+          if errors:
+              print(f"\n❌ {len(errors)} 个错误，中止提交:")
+              for e in errors:
+                  print(f"  - {e}")
+              raise SystemExit(1)
+
+          if migrated == 0:
+              print("ℹ️ 无需重组")
+          else:
+              result = subprocess.run(
+                  ['git', 'commit', '-m', f'chore: reorganize {yesterday_str} data → {y}/{m}/{d} [skip ci]'],
+                  capture_output=True, text=True
+              )
+              if result.returncode == 0:
+                  subprocess.run(['git', 'pull', '--rebase'], check=True)
+                  subprocess.run(['git', 'push'], check=True)
+                  print(f"✅ 已提交并推送")
+              else:
+                  print(f"⚠️ 提交失败: {result.stderr}")
+                  raise SystemExit(1)
+          PYEOF
