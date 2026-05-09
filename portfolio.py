@@ -15,7 +15,7 @@ import requests
 def get_bank():
     for p in [
         Path(__file__).parent / 'Central-Bank',          # GitHub Actions: checkout 到同级目录
-        Path(__file__).parent.parent / 'Central-Bank',    # 本地: refinery-erngine/../Central-Bank
+        Path(__file__).parent.parent / 'Central-Bank',    # 本地: refinery-engine/../Central-Bank
         Path.home() / 'Downloads' / 'Central-Bank',      # 本地: ~/Downloads/Central-Bank
         Path('../Central-Bank'),                          # 相对路径
     ]:
