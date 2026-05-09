@@ -30,7 +30,16 @@ if not all([GITHUB_TOKEN, SUPABASE_URL, SUPABASE_KEY]):
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 auth = Auth.Token(GITHUB_TOKEN)
 gh_client = Github(auth=auth, timeout=30)
-private_repo = gh_client.get_repo(PRIVATE_BANK_ID)
+
+# 懒加载：首次访问时才调 API，避免启动时挂死
+_private_repo = None
+def get_private_repo():
+    global _private_repo
+    if _private_repo is None:
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔗 连接 Central-Bank...")
+        _private_repo = gh_client.get_repo(PRIVATE_BANK_ID)
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ 已连接")
+    return _private_repo
 
 # === 🧩 2. 插件发现系统 (强制指向 raw_signals) ===
 def get_all_processors():
@@ -141,11 +150,11 @@ def generate_hot_reports(processors_config):
 
     def _write_report():
         try:
-            old = private_repo.get_contents(report_path)
-            private_repo.update_file(old.path, f"📊 Update: {file_name}", md_report, old.sha)
+            old = get_private_repo().get_contents(report_path)
+            get_private_repo().update_file(old.path, f"📊 Update: {file_name}", md_report, old.sha)
             print(f"📝 战报更新：{report_path}")
         except Exception:
-            private_repo.create_file(report_path, f"🚀 New: {file_name}", md_report)
+            get_private_repo().create_file(report_path, f"🚀 New: {file_name}", md_report)
             print(f"📝 战报创建：{report_path}")
 
     try:
@@ -164,7 +173,7 @@ def generate_hot_reports(processors_config):
 def _cleanup_old_reports(cutoff):
     """删除 reports/ 下超过7天的战报文件（每次只删最老的一天，避免API过载）"""
     try:
-        reports_dir = private_repo.get_contents("reports")
+        reports_dir = get_private_repo().get_contents("reports")
     except Exception:
         return
 
@@ -174,14 +183,14 @@ def _cleanup_old_reports(cutoff):
         if not year_dir.type == 'dir' or not year_dir.name.isdigit():
             continue
         try:
-            month_dirs = private_repo.get_contents(year_dir.path)
+            month_dirs = get_private_repo().get_contents(year_dir.path)
         except Exception:
             continue
         for month_dir in month_dirs:
             if not month_dir.type == 'dir':
                 continue
             try:
-                day_dirs = private_repo.get_contents(month_dir.path)
+                day_dirs = get_private_repo().get_contents(month_dir.path)
             except Exception:
                 continue
             for day_dir in day_dirs:
@@ -201,9 +210,9 @@ def _cleanup_old_reports(cutoff):
     # 只删最老的一天（每次运行删24个文件，不超API限制）
     oldest = old_dirs[0]
     try:
-        files = private_repo.get_contents(oldest.path)
+        files = get_private_repo().get_contents(oldest.path)
         for f in files:
-            private_repo.delete_file(f.path, f"🗑️ 清理旧报告: {f.name}", f.sha)
+            get_private_repo().delete_file(f.path, f"🗑️ 清理旧报告: {f.name}", f.sha)
             print(f"🗑️ 删除: {f.path}")
         print(f"✅ 已清理 {oldest.path}")
     except Exception as e:
@@ -243,7 +252,7 @@ def perform_grand_harvest(processors_config):
                 # 🔥 修改结束
                 
                 try:
-                    private_repo.create_file(
+                    get_private_repo().create_file(
                         path=archive_path,
                         message=f"🏛️ Archive: {table} batch",
                         content=buffer.getvalue(),
@@ -280,7 +289,7 @@ def process_and_upload(path, sha, config):
     print(f"   📄 处理: {path}")
 
     try:
-        content_file = private_repo.get_contents(path)
+        content_file = get_private_repo().get_contents(path)
         raw_data = json.loads(base64.b64decode(content_file.content).decode('utf-8'))
 
         # 调用 Processor 清洗数据
@@ -320,11 +329,11 @@ def sync_bank_to_sql(processors_config, full_scan=False):
     
     if full_scan:
         try:
-            contents = private_repo.get_contents("")
+            contents = get_private_repo().get_contents("")
             while contents:
                 file_content = contents.pop(0)
                 if file_content.type == "dir":
-                    contents.extend(private_repo.get_contents(file_content.path))
+                    contents.extend(get_private_repo().get_contents(file_content.path))
                 elif file_content.name.endswith(".json"):
                     source_key = file_content.path.split('/')[0]
                     if source_key in processors_config:
@@ -335,7 +344,7 @@ def sync_bank_to_sql(processors_config, full_scan=False):
         # 增量模式：只检查最近 24 小时以内的 Commit
         since = datetime.now(timezone.utc) - timedelta(hours=24)
         print(f"   📜 获取最近24h commits...")
-        commits = private_repo.get_commits(since=since)
+        commits = get_private_repo().get_commits(since=since)
         commit_list = list(commits)  # 强制求值，触发API调用并计数
         print(f"   📜 共 {len(commit_list)} 个 commits，开始遍历...")
         for commit in commit_list:
