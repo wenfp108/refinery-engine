@@ -29,7 +29,7 @@ if not all([GITHUB_TOKEN, SUPABASE_URL, SUPABASE_KEY]):
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 auth = Auth.Token(GITHUB_TOKEN)
-gh_client = Github(auth=auth)
+gh_client = Github(auth=auth, timeout=30)
 private_repo = gh_client.get_repo(PRIVATE_BANK_ID)
 
 # === 🧩 2. 插件发现系统 (强制指向 raw_signals) ===
@@ -277,6 +277,7 @@ def process_and_upload(path, sha, config):
     # 检查哨兵：文件是否处理过
     check = supabase.table("processed_files").select("file_sha").eq("file_sha", sha).execute()
     if check.data: return 0
+    print(f"   📄 处理: {path}")
 
     try:
         content_file = private_repo.get_contents(path)
@@ -333,8 +334,11 @@ def sync_bank_to_sql(processors_config, full_scan=False):
     else:
         # 增量模式：只检查最近 24 小时以内的 Commit
         since = datetime.now(timezone.utc) - timedelta(hours=24)
+        print(f"   📜 获取最近24h commits...")
         commits = private_repo.get_commits(since=since)
-        for commit in commits:
+        commit_list = list(commits)  # 强制求值，触发API调用并计数
+        print(f"   📜 共 {len(commit_list)} 个 commits，开始遍历...")
+        for commit in commit_list:
             for f in commit.files:
                 if f.filename.endswith('.json'):
                     source_key = f.filename.split('/')[0]
@@ -346,11 +350,32 @@ def sync_bank_to_sql(processors_config, full_scan=False):
         if count > 0: print(f"✅ {source} (+{count}) -> raw_signals")
 
 if __name__ == "__main__":
+    start_time = time.time()
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🏭 开始...")
+
+    try:
+        rl = gh_client.get_rate_limit()
+        print(f"   📊 API 剩余: {rl.core.remaining}/{rl.core.limit} (重置: {rl.core.reset.strftime('%H:%M')})")
+        if rl.core.remaining < 50:
+            print(f"   ⚠️ API 额度不足，可能影响性能！")
+    except Exception:
+        pass
+
     all_procs = get_all_processors()
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🧩 处理器: {list(all_procs.keys())}")
+
     is_full_scan = (os.environ.get("FORCE_FULL_SCAN") == "true")
-    
+
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] 📡 同步开始...")
     sync_bank_to_sql(all_procs, full_scan=is_full_scan)
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] 📡 同步完成 (+{int(time.time()-start_time)}s)")
+
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] 📊 报告生成...")
     generate_hot_reports(all_procs)
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] 📊 报告完成 (+{int(time.time()-start_time)}s)")
+
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚜 收割开始...")
     perform_grand_harvest(all_procs)
-    
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ 审计任务圆满完成。")
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚜 收割完成 (+{int(time.time()-start_time)}s)")
+
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ 审计任务圆满完成。耗时 {int(time.time()-start_time)}s")

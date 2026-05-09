@@ -5,9 +5,14 @@ on:
     - cron: '0 * * * *'  # 每小时第0分钟触发 (UTC时间，对应北京时间整点)
   workflow_dispatch:      # 允许手动按钮触发
 
+concurrency:
+  group: refinery
+  cancel-in-progress: true
+
 jobs:
   refine:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout Code
         uses: actions/checkout@v3
