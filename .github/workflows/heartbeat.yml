@@ -138,6 +138,19 @@ jobs:
                       if git_mv(fpath, f"{dst_dir}/{fname}"):
                           migrated += 1
 
+          # === 5. GitHub Tech ===
+          src_dir = f"github/tech/{yesterday_str}"
+          if os.path.isdir(src_dir):
+              print(f"\n🔧 GitHub/Tech: {src_dir}")
+              dst_dir = f"github/tech/{y}/{m}/{d}"
+              for fname in sorted(os.listdir(src_dir)):
+                  if git_mv(f"{src_dir}/{fname}", f"{dst_dir}/{fname}"):
+                      migrated += 1
+              try:
+                  os.rmdir(src_dir)
+              except OSError:
+                  pass
+
           # === 结果 ===
           print(f"\n{'='*50}")
           print(f"📊 总计: {migrated} 个文件")
