@@ -62,13 +62,13 @@ jobs:
           # ============================================================
 
           bj_now = datetime.now(timezone(timedelta(hours=8)))
-          yesterday = bj_now - timedelta(days=1)
-          yesterday_str = yesterday.strftime('%Y-%m-%d')
-          y = yesterday.strftime('%Y')
-          m = yesterday.strftime('%m')
-          d = yesterday.strftime('%d')
+          target = bj_now - timedelta(days=2)  # 前天，给炼油机留 24h 缓冲
+          target_str = target.strftime('%Y-%m-%d')
+          y = target.strftime('%Y')
+          m = target.strftime('%m')
+          d = target.strftime('%d')
 
-          print(f"📅 重组目标日期: {yesterday_str} → {y}/{m}/{d}")
+          print(f"📅 重组目标日期（前天）: {target_str} → {y}/{m}/{d}")
 
           migrated = 0
           errors = []
@@ -92,7 +92,7 @@ jobs:
               return True
 
           # === 1. Papers ===
-          src_dir = f"papers/global/{yesterday_str}"
+          src_dir = f"papers/global/{target_str}"
           if os.path.isdir(src_dir):
               print(f"\n📄 Papers: {src_dir}")
               dst_dir = f"papers/global/{y}/{m}/{d}"
@@ -106,7 +106,7 @@ jobs:
 
           # === 2. Polymarket ===
           for sub in ['strategy', 'trends']:
-              src_dir = f"polymarket/{sub}/{yesterday_str}"
+              src_dir = f"polymarket/{sub}/{target_str}"
               if not os.path.isdir(src_dir):
                   continue
               print(f"\n📊 Polymarket/{sub}: {src_dir}")
@@ -120,11 +120,11 @@ jobs:
                   pass
 
           # === 3. Twitter ===
-          src_file = f"twitter/{yesterday_str}.json"
+          src_file = f"twitter/{target_str}.json"
           if os.path.isfile(src_file):
               print(f"\n🐦 Twitter: {src_file}")
               dst_dir = f"twitter/{y}/{m}/{d}"
-              if git_mv(src_file, f"{dst_dir}/{yesterday_str}.json"):
+              if git_mv(src_file, f"{dst_dir}/{target_str}.json"):
                   migrated += 1
 
           # === 4. Reddit ===
@@ -139,7 +139,7 @@ jobs:
                           migrated += 1
 
           # === 5. GitHub Tech ===
-          src_dir = f"github/tech/{yesterday_str}"
+          src_dir = f"github/tech/{target_str}"
           if os.path.isdir(src_dir):
               print(f"\n🔧 GitHub/Tech: {src_dir}")
               dst_dir = f"github/tech/{y}/{m}/{d}"
@@ -165,13 +165,23 @@ jobs:
               print("ℹ️ 无需重组")
           else:
               result = subprocess.run(
-                  ['git', 'commit', '-m', f'chore: reorganize {yesterday_str} data → {y}/{m}/{d} [skip ci]'],
+                  ['git', 'commit', '-m', f'chore: reorganize {target_str} data → {y}/{m}/{d} [skip ci]'],
                   capture_output=True, text=True
               )
               if result.returncode == 0:
                   subprocess.run(['git', 'pull', '--rebase'], check=True)
-                  subprocess.run(['git', 'push'], check=True)
-                  print(f"✅ 已提交并推送")
+                  # push 重试 3 次，防止网络波动
+                  for attempt in range(3):
+                      push_r = subprocess.run(['git', 'push'], capture_output=True, text=True)
+                      if push_r.returncode == 0:
+                          print(f"✅ 已提交并推送")
+                          break
+                      print(f"⚠️ push 失败 (第{attempt+1}次): {push_r.stderr.strip()}")
+                      if attempt < 2:
+                          import time; time.sleep(5)
+                  else:
+                      print("❌ push 重试 3 次均失败")
+                      raise SystemExit(1)
               else:
                   print(f"⚠️ 提交失败: {result.stderr}")
                   raise SystemExit(1)

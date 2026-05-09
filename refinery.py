@@ -1,9 +1,22 @@
-import os, json, base64, requests, importlib.util, sys
+import os, json, base64, requests, importlib.util, sys, time
 import pandas as pd
 import io
 from datetime import datetime, timedelta, timezone
 from supabase import create_client
 from github import Github, Auth
+
+
+def retry(func, *args, retries=3, delay=5, **kwargs):
+    """通用重试包装器"""
+    for attempt in range(retries):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            print(f"⚠️ {func.__name__} 失败 (第{attempt+1}次): {e}")
+            if attempt < retries - 1:
+                time.sleep(delay)
+            else:
+                raise
 
 # === 🛡️ 1. 核心配置 ===
 PRIVATE_BANK_ID = "wenfp108/Central-Bank" 
@@ -126,7 +139,7 @@ def generate_hot_reports(processors_config):
     if not has_content:
         md_report += "\n\n**🛑 本轮扫描全域静默，请查阅历史归档。**"
 
-    try:
+    def _write_report():
         try:
             old = private_repo.get_contents(report_path)
             private_repo.update_file(old.path, f"📊 Update: {file_name}", md_report, old.sha)
@@ -134,8 +147,11 @@ def generate_hot_reports(processors_config):
         except Exception:
             private_repo.create_file(report_path, f"🚀 New: {file_name}", md_report)
             print(f"📝 战报创建：{report_path}")
+
+    try:
+        retry(_write_report)
     except Exception as e:
-        print(f"❌ 写入失败: {e}")
+        print(f"❌ 写入失败（重试 3 次后）: {e}")
 
     # 清理7天前的旧报告
     try:
@@ -259,39 +275,43 @@ def perform_grand_harvest(processors_config):
 # === 🏦 5. 搬运逻辑 (核心：JSON -> Supabase) ===
 def process_and_upload(path, sha, config):
     # 检查哨兵：文件是否处理过
-    check = supabase.table("processed_files").select("file_sha").eq("file_sha", sha).execute()
-    if check.data: return 0
-    
     try:
-        content_file = private_repo.get_contents(path)
+        check = retry(supabase.table("processed_files").select("file_sha").eq("file_sha", sha).execute)
+        if check.data: return 0
+    except Exception:
+        print(f"⚠️ 哨兵检查失败，跳过: {path}")
+        return 0
+
+    try:
+        content_file = retry(private_repo.get_contents, path)
         raw_data = json.loads(base64.b64decode(content_file.content).decode('utf-8'))
-        
+
         # 调用 Processor 清洗数据
         items = config["module"].process(raw_data, path)
         count = len(items) if items else 0
-        
+
         if items:
             # 🔥 注入核心字段 signal_type
             for item in items:
                 item['signal_type'] = config["source_name"]
-                
+
                 # 兼容性处理：确保 raw_json 存在
                 if 'raw_json' not in item:
                     item['raw_json'] = item.copy()
 
-            # 分批写入 raw_signals
+            # 分批写入 raw_signals（带重试）
             for i in range(0, len(items), 500):
-                supabase.table("raw_signals").insert(items[i : i+500]).execute()
-            
-            # 登记哨兵
-            supabase.table("processed_files").upsert({
-                "file_sha": sha, 
+                retry(supabase.table("raw_signals").insert(items[i : i+500]).execute)
+
+            # 登记哨兵（带重试）
+            retry(supabase.table("processed_files").upsert({
+                "file_sha": sha,
                 "file_path": path,
                 "engine": config["source_name"],
                 "item_count": count
-            }).execute()
+            }).execute)
             return count
-    except Exception as e: 
+    except Exception as e:
         print(f"❌ 处理文件 {path} 失败: {e}")
     return 0
 
