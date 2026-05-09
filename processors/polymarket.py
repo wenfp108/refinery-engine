@@ -70,10 +70,31 @@ def calculate_score(item):
     score = vol24h * (day_change + 1)
     text = (str(item.get('title')) + " " + str(item.get('question'))).lower()
     snipers = ["gold", "bitcoin", "btc", "fed", "federal reserve", "xau"]
-    if any(k in text for k in snipers) and "warsh" not in text: score *= 100
+    if any(k in text for k in snipers) and "warsh" not in text: score *= 5  # 从 100x 降到 5x
     tags = item.get('strategy_tags') or []
     if 'TAIL_RISK' in tags: score *= 50
     return score
+
+
+def get_event_group(item):
+    """将同类事件聚合，防止 Bitcoin 价格问题刷屏"""
+    title = str(item.get('title', '')).lower()
+    question = str(item.get('question', '')).lower()
+    combined = title + " " + question
+
+    # Bitcoin 价格类 → 合并为一组
+    if any(k in combined for k in ["bitcoin above", "bitcoin price", "bitcoin hit", "btc above", "btc price"]):
+        return "bitcoin_price"
+    # Fed 利率类
+    if any(k in combined for k in ["fed decision", "fed rate", "rate cut", "federal reserve"]):
+        return "fed_rates"
+    # Gold 类
+    if any(k in combined for k in ["gold hit", "gold settle", "gc hit", "gc settle", "xau"]):
+        return "gold"
+    # 2028 大选类
+    if "2028" in combined and any(k in combined for k in ["president", "nominee", "election"]):
+        return "election_2028"
+    return item.get('slug', 'other')  # 默认用 slug
 
 # 🔥 修复 f-string 报错
 def get_win_rate_str(price_str):
@@ -121,14 +142,14 @@ def get_hot_items(supabase, table_name):
     def anti_flood_filter(items):
         grouped = {}
         for i in items:
-            s = i['slug']
-            if s not in grouped: grouped[s] = []
-            grouped[s].append(i)
+            group = get_event_group(i)
+            if group not in grouped: grouped[group] = []
+            grouped[group].append(i)
         final = []
-        for s, rows in grouped.items():
+        for group, rows in grouped.items():
             for r in rows: r['_temp_score'] = calculate_score(r)
             rows.sort(key=lambda x: x['_temp_score'], reverse=True)
-            final.extend(rows[:2])
+            final.extend(rows[:2])  # 每组最多 2 条
         return final
 
     # 🔥 2. 构建 8 列宽表
