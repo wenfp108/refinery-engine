@@ -275,15 +275,11 @@ def perform_grand_harvest(processors_config):
 # === 🏦 5. 搬运逻辑 (核心：JSON -> Supabase) ===
 def process_and_upload(path, sha, config):
     # 检查哨兵：文件是否处理过
-    try:
-        check = retry(supabase.table("processed_files").select("file_sha").eq("file_sha", sha).execute)
-        if check.data: return 0
-    except Exception:
-        print(f"⚠️ 哨兵检查失败，跳过: {path}")
-        return 0
+    check = supabase.table("processed_files").select("file_sha").eq("file_sha", sha).execute()
+    if check.data: return 0
 
     try:
-        content_file = retry(private_repo.get_contents, path)
+        content_file = private_repo.get_contents(path)
         raw_data = json.loads(base64.b64decode(content_file.content).decode('utf-8'))
 
         # 调用 Processor 清洗数据
@@ -299,17 +295,17 @@ def process_and_upload(path, sha, config):
                 if 'raw_json' not in item:
                     item['raw_json'] = item.copy()
 
-            # 分批写入 raw_signals（带重试）
+            # 分批写入 raw_signals
             for i in range(0, len(items), 500):
-                retry(supabase.table("raw_signals").insert(items[i : i+500]).execute)
+                supabase.table("raw_signals").insert(items[i : i+500]).execute()
 
-            # 登记哨兵（带重试）
-            retry(supabase.table("processed_files").upsert({
+            # 登记哨兵
+            supabase.table("processed_files").upsert({
                 "file_sha": sha,
                 "file_path": path,
                 "engine": config["source_name"],
                 "item_count": count
-            }).execute)
+            }).execute()
             return count
     except Exception as e:
         print(f"❌ 处理文件 {path} 失败: {e}")
