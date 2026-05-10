@@ -315,16 +315,19 @@ def sync_bank_to_sql(processors_config, full_scan=False):
                         stats[source_key] += added
         except Exception as e: print(f"❌ Scan Error: {e}")
     else:
-        # 增量模式：只检查最近 2 小时以内的 Commit（每小时跑一次，2h留缓冲）
-        since = datetime.now(timezone.utc) - timedelta(hours=2)
-        commits = private_repo.get_commits(since=since)
-        for commit in commits:
-            for f in commit.files:
-                if f.filename.endswith('.json'):
-                    source_key = f.filename.split('/')[0]
-                    if source_key in processors_config:
-                        added = process_and_upload(f.filename, f.sha, processors_config[source_key])
-                        stats[source_key] += added
+        # 增量模式：检查最近 3 小时的 Commit（每小时跑一次，3h防漏）
+        since = datetime.now(timezone.utc) - timedelta(hours=3)
+        try:
+            commits = private_repo.get_commits(since=since)
+            for commit in commits:
+                for f in commit.files:
+                    if f.filename.endswith('.json'):
+                        source_key = f.filename.split('/')[0]
+                        if source_key in processors_config:
+                            added = process_and_upload(f.filename, f.sha, processors_config[source_key])
+                            stats[source_key] += added
+        except Exception as e:
+            print(f"⚠️ 获取 commits 失败（跳过本轮同步）: {e}")
 
     for source, count in stats.items():
         if count > 0: print(f"✅ {source} (+{count}) -> raw_signals")
