@@ -29,7 +29,7 @@ def process(raw_data, path):
             "repo_name": i.get('name'),
             "url": i.get('url'),
             "stars": int(i.get('stars', 0)),
-            "full_text": i.get('description', ''),  # 项目描述
+            "full_text": i.get('full_text', ''),  # 项目描述
             # 这里的 tags 其实是 sentinel.js 里的策略标签 (e.g. ['TECH_ACCELERATOR'])
             "topics": i.get('tags', []),
             "raw_json": i
