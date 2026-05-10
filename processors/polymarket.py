@@ -103,9 +103,12 @@ def get_event_group(item):
     question = str(item.get('question', '')).lower()
     combined = title + " " + question
 
-    # Bitcoin 价格类 → 合并为一组
-    if any(k in combined for k in ["bitcoin above", "bitcoin price", "bitcoin hit", "btc above", "btc price"]):
-        return "bitcoin_price"
+    # Bitcoin/BTC 价格类 → 合并为一组
+    if any(k in combined for k in ["bitcoin above", "bitcoin price", "bitcoin hit", "bitcoin all time", "btc above", "btc price"]):
+        return "crypto_price"
+    # Ethereum 价格类
+    if any(k in combined for k in ["ethereum price", "eth above", "eth price"]):
+        return "crypto_price"
     # Fed 利率类
     if any(k in combined for k in ["fed decision", "fed rate", "rate cut", "federal reserve"]):
         return "fed_rates"
