@@ -327,17 +327,25 @@ def sync_bank_to_sql(processors_config, full_scan=False):
             since = datetime.now(timezone.utc) - timedelta(hours=3)
 
         try:
+            # 预加载已处理文件的 SHA，避免对 watchdog 的 100+ 重复文件逐个调 API
+            processed_res = supabase.table("processed_files").select("file_sha").execute()
+            processed_shas = set(r["file_sha"] for r in (processed_res.data or []))
+
             commits = private_repo.get_commits(since=since)
             commit_count = 0
+            skipped = 0
             for commit in commits:
                 commit_count += 1
                 for f in commit.files:
                     if f.filename.endswith('.json'):
+                        if f.sha in processed_shas:
+                            skipped += 1
+                            continue
                         source_key = f.filename.split('/')[0]
                         if source_key in processors_config:
                             added = process_and_upload(f.filename, f.sha, processors_config[source_key])
                             stats[source_key] += added
-            print(f"   📜 扫描 {commit_count} 个 commits")
+            print(f"   📜 扫描 {commit_count} 个 commits, 跳过 {skipped} 个已处理文件")
         except Exception as e:
             print(f"⚠️ 获取 commits 失败（跳过本轮同步）: {e}")
 
