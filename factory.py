@@ -282,6 +282,7 @@ class UniversalFactory:
             if added:
                 with open(output_file, 'a', encoding='utf-8') as f:
                     f.write('\n'.join(added) + '\n')
+                self.git_push_assets()
 
     def call_ai(self, model, sys_prompt, usr_prompt):
         headers = {
@@ -360,13 +361,17 @@ class UniversalFactory:
         print("🔄 正在通过 rebase 同步远程仓库...")
         subprocess.run(["git", "pull", "origin", "main", "--rebase"], cwd=cwd)
 
-        # 5. 最终推送
-        push_res = subprocess.run(["git", "push", "origin", "main"], cwd=cwd, capture_output=True, text=True)
-        
-        if push_res.returncode == 0:
-            print("🚀 认知资产已成功同步至中央银行。")
-        else:
-            print(f"❌ 最终推送失败: {push_res.stderr}")
+        # 5. 带重试的推送
+        for attempt in range(3):
+            subprocess.run(["git", "fetch", "origin", "main"], cwd=cwd)
+            subprocess.run(["git", "rebase", "origin/main"], cwd=cwd)
+            push_res = subprocess.run(["git", "push", "origin", "main"], cwd=cwd, capture_output=True, text=True)
+            if push_res.returncode == 0:
+                print(f"🚀 认知资产已同步至中央银行 (批次 {datetime.now().strftime('%H:%M:%S')})")
+                return
+            print(f"⏳ Push 失败，第 {attempt+1}/3 次重试...")
+            time.sleep(3)
+        print(f"❌ 最终推送失败: {push_res.stderr}")
 
 if __name__ == "__main__":
     factory = UniversalFactory()
