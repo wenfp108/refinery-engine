@@ -16,9 +16,14 @@ on:
           - dca
           - init
 
+concurrency:
+  group: portfolio
+  cancel-in-progress: true
+
 jobs:
   portfolio:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -62,5 +67,23 @@ jobs:
           git config user.name "github-actions"
           git config user.email "actions@github.com"
           git add data/portfolio/ reports/portfolio/
-          git diff --staged --quiet || git commit -m "Portfolio update $(date +%Y-%m-%d)"
-          git push
+
+          if git diff --staged --quiet; then
+            echo "💤 无新数据"
+            exit 0
+          fi
+
+          git commit -m "Portfolio update $(date +%Y-%m-%d)"
+
+          for attempt in 1 2 3; do
+            git fetch origin main
+            git rebase origin/main
+            if git push origin main; then
+              echo "✅ 推送成功"
+              exit 0
+            fi
+            echo "⏳ Push 失败，第 ${attempt}/3 次重试..."
+            sleep 5
+          done
+          echo "❌ Push 最终失败"
+          exit 1
