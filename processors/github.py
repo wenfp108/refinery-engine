@@ -56,8 +56,8 @@ def get_hot_items(supabase, table_name):
         if name not in unique_repos or r['stars'] > unique_repos[name]['stars']:
             unique_repos[name] = r
 
-    # 2. 过滤低质量项目：至少 100 stars
-    repo_list = [r for r in unique_repos.values() if r.get('stars', 0) >= 100]
+    # 2. 排序：按 Star 数降序（trending 列表本身就是"正在火"的项目）
+    repo_list = list(unique_repos.values())
     repo_list.sort(key=lambda x: x['stars'], reverse=True)
     final_list = repo_list[:30]
 
