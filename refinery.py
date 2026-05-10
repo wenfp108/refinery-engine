@@ -315,9 +315,8 @@ def sync_bank_to_sql(processors_config, full_scan=False):
                         stats[source_key] += added
         except Exception as e: print(f"❌ Scan Error: {e}")
     else:
-        # 增量模式：24h 窗口 + 哨兵去重（不怕重复，怕遗漏）
-        # 如果炼油机挂了几小时，重启用 24h 窗口自动补上所有遗漏数据
-        since = datetime.now(timezone.utc) - timedelta(hours=24)
+        # 增量模式：3h 窗口（每小时跑，3h 重叠 2 次防漏）
+        since = datetime.now(timezone.utc) - timedelta(hours=3)
         try:
             commits = private_repo.get_commits(since=since)
             commit_count = 0
