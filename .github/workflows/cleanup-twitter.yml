@@ -1,0 +1,25 @@
+name: 🧹 Cleanup Twitter Root (One-Time)
+
+on:
+  workflow_dispatch:  # 只能手动触发
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install Dependencies
+        run: pip install PyGithub
+
+      - name: Cleanup Twitter Root
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+        run: python cleanup_twitter_root.py
