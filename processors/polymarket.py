@@ -3,7 +3,20 @@ import math
 from datetime import datetime, timedelta
 
 TABLE_NAME = "polymarket_logs"
-RADAR_TARGET_TOTAL = 50  
+RADAR_TARGET_TOTAL = 50
+
+# 🚫 噪音过滤：猎奇/阴谋论/低质量话题
+NOISE_KEYWORDS = [
+    "aliens", "alien exist", "ufo", "extraterrestrial",
+    "epstein", "suicide note", "conspiracy",
+    "flat earth", "illuminati", "new world order",
+    "bigfoot", "loch ness", "area 51",
+]
+
+def is_noise(item):
+    """过滤猎奇/阴谋论内容"""
+    text = (str(item.get('title', '')) + " " + str(item.get('question', ''))).lower()
+    return any(kw in text for kw in NOISE_KEYWORDS)
 
 # 🎨 美化工具
 def fmt_k(num, prefix=""):
@@ -69,10 +82,18 @@ def calculate_score(item):
     day_change = abs(float(item.get('dayChange') or item.get('day_change') or 0))
     score = vol24h * (day_change + 1)
     text = (str(item.get('title')) + " " + str(item.get('question'))).lower()
-    snipers = ["gold", "bitcoin", "btc", "fed", "federal reserve", "xau"]
-    if any(k in text for k in snipers) and "warsh" not in text: score *= 5  # 从 100x 降到 5x
+
+    # 分层狙击：Gold/Fed 优先，Bitcoin 降权
+    gold_fed = ["gold", "xau", "fed", "federal reserve"]
+    bitcoin = ["bitcoin", "btc"]
+    if any(k in text for k in gold_fed) and "warsh" not in text:
+        score *= 3
+    elif any(k in text for k in bitcoin):
+        score *= 1.5  # Bitcoin 不再享受高权重
+
     tags = item.get('strategy_tags') or []
-    if 'TAIL_RISK' in tags: score *= 50
+    if 'TAIL_RISK' in tags:
+        score *= 3  # 从 ×50 降到 ×3，防止分数爆炸
     return score
 
 
@@ -133,7 +154,10 @@ def get_hot_items(supabase, table_name):
         return list(latest_map.values())
 
     clean_data = deduplicate_snapshots(all_data)
-    
+
+    # 过滤噪音内容
+    clean_data = [i for i in clean_data if not is_noise(i)]
+
     sniper_pool = [i for i in clean_data if i.get('engine') == 'sniper']
     radar_pool = [i for i in clean_data if i.get('engine') == 'radar']
     sector_matrix = {}

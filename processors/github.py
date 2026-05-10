@@ -29,9 +29,10 @@ def process(raw_data, path):
             "repo_name": i.get('name'),
             "url": i.get('url'),
             "stars": int(i.get('stars', 0)),
+            "full_text": i.get('description', ''),  # 项目描述
             # 这里的 tags 其实是 sentinel.js 里的策略标签 (e.g. ['TECH_ACCELERATOR'])
             "topics": i.get('tags', []),
-            "raw_json": i 
+            "raw_json": i
         }
         refined_results.append(row)
     return refined_results
@@ -55,31 +56,33 @@ def get_hot_items(supabase, table_name):
         if name not in unique_repos or r['stars'] > unique_repos[name]['stars']:
             unique_repos[name] = r
 
-    # 2. 排序：直接按 Star 数降序，取 Top 30
-    repo_list = list(unique_repos.values())
+    # 2. 过滤低质量项目：至少 100 stars
+    repo_list = [r for r in unique_repos.values() if r.get('stars', 0) >= 100]
     repo_list.sort(key=lambda x: x['stars'], reverse=True)
     final_list = repo_list[:30]
 
     # 3. 构建单一宽表
-    header = "| Stars | 项目 | 核心标签 | 🔗 |\n| :--- | :--- | :--- | :--- |"
+    header = "| Stars | 项目 | 描述 | 标签 | 🔗 |\n| :--- | :--- | :--- | :--- | :--- |"
     rows = []
-    
+
     for r in final_list:
         stars = fmt_k(r['stars'])
         name = r.get('repo_name', 'Unknown')
-        
+
+        # 描述：截断到 60 字符
+        desc = str(r.get('full_text', '') or '').replace('|', '').replace('\n', ' ')[:60]
+        if not desc: desc = '-'
+
         # 处理标签显示
         raw_tags = r.get('topics', [])
         if isinstance(raw_tags, str):
             try: raw_tags = json.loads(raw_tags)
             except: raw_tags = []
-            
-        # 标签美化：只显示前2个，用代码块包裹看起来更像标签
-        # e.g. `AI_CORE`, `VIRAL_GIANT`
+
         tag_str = " ".join([f"`{t}`" for t in raw_tags[:2]]) if raw_tags else "-"
-        
+
         url = r.get('url', '#')
-        
-        rows.append(f"| ⭐ {stars} | **{name}** | {tag_str} | [🔗]({url}) |")
+
+        rows.append(f"| ⭐ {stars} | **{name}** | {desc} | {tag_str} | [🔗]({url}) |")
         
     return {"🏆 GitHub Trending (Global Top 30)": {"header": header, "rows": rows}}
