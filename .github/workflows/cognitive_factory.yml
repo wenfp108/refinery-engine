@@ -10,10 +10,14 @@ on:
   # 保留手动按钮，方便你随时想看报告时手动点击执行
   workflow_dispatch: 
 
+concurrency:
+  group: cognitive-factory
+  cancel-in-progress: true
+
 jobs:
   audit_and_ship:
-    # 移除之前的 if 条件，因为现在是独立运行
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: write
 
@@ -72,24 +76,27 @@ jobs:
       - name: Ship to Central Bank
         run: |
           cd vault
-          # 1. 强制声明身份 (解决 Author identity unknown)
-          git config user.name "Cognitive Bot"
-          git config user.email "bot@wenfp108.com"
-          
-          # 2. 检查是否有新产出的 .jsonl
-          if [[ -n $(git status -s instructions/) ]]; then
-            # 3. 暂存并提交本地改动 (这 1184 条就在这)
-            git add instructions/
-            git commit -m "🧠 Cognitive Audit: Batch update at $(date +'%Y-%m-%d %H:%M')"
-            
-            # 4. 关键：强制拉取并用 rebase 解决 [rejected] 冲突
-            # 这会把你的这 1184 条数据“接”在仓库最新版本的后面
-            echo "🔄 发现远程更新，正在执行 Rebase 同步..."
-            git pull origin main --rebase
-            
-            # 5. 推送
-            git push origin main
-            echo "✅ 1184+ 条认知资产已安全入库中央银行。"
-          else
-            echo "💤 本轮无新信号生成，API 余额已受去重逻辑保护。"
+          git config user.name “Cognitive Bot”
+          git config user.email “bot@wenfp108.com”
+
+          if [[ -z $(git status -s instructions/) ]]; then
+            echo “💤 本轮无新信号生成”
+            exit 0
           fi
+
+          git add instructions/
+          git commit -m “🧠 Cognitive Audit: Batch update at $(date +'%Y-%m-%d %H:%M')”
+
+          # 带重试的 push（应对其他 workflow 同时写入 Central-Bank）
+          for attempt in 1 2 3; do
+            git fetch origin main
+            git rebase origin/main
+            if git push origin main; then
+              echo “✅ 认知资产已入库”
+              exit 0
+            fi
+            echo “⏳ Push 失败，第 ${attempt}/3 次重试...”
+            sleep 5
+          done
+          echo “❌ Push 最终失败”
+          exit 1

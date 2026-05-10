@@ -282,7 +282,6 @@ class UniversalFactory:
             if added:
                 with open(output_file, 'a', encoding='utf-8') as f:
                     f.write('\n'.join(added) + '\n')
-                self.git_push_assets()
 
     def call_ai(self, model, sys_prompt, usr_prompt):
         headers = {

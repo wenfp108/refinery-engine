@@ -7,7 +7,7 @@
 AI_API_URL = "https://token-plan-sgp.xiaomimimo.com/v1/chat/completions"
 AI_MODEL = "mimo-v2.5-pro"
 AI_MAX_RETRIES = 3
-AI_TIMEOUT = 30  # 秒
+AI_TIMEOUT = 60  # 秒
 
 # === 信号筛选配额 (每个来源保留多少条进入审计) ===
 SIGNAL_QUOTAS = {
@@ -51,7 +51,7 @@ POLY_BASE_SCORE = 1_000_000
 
 # === 审计批次 ===
 AUDIT_BATCH_SIZE = 50
-AUDIT_WORKERS = 20
+AUDIT_WORKERS = 5
 
 # === 归档 ===
 ARCHIVE_RETENTION_DAYS = 7
