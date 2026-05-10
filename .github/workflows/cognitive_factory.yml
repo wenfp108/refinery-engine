@@ -17,7 +17,7 @@ concurrency:
 jobs:
   audit_and_ship:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 120
     permissions:
       contents: write
 
