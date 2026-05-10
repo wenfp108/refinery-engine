@@ -315,8 +315,8 @@ def sync_bank_to_sql(processors_config, full_scan=False):
                         stats[source_key] += added
         except Exception as e: print(f"❌ Scan Error: {e}")
     else:
-        # 增量模式：只检查最近 24 小时以内的 Commit
-        since = datetime.now(timezone.utc) - timedelta(hours=24)
+        # 增量模式：只检查最近 2 小时以内的 Commit（每小时跑一次，2h留缓冲）
+        since = datetime.now(timezone.utc) - timedelta(hours=2)
         commits = private_repo.get_commits(since=since)
         for commit in commits:
             for f in commit.files:
