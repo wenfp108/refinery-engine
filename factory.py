@@ -322,56 +322,78 @@ class UniversalFactory:
 
         return "ERROR", "AI_FAIL"
 
+    def _run_git(self, args, cwd, check=False):
+        """执行 git 命令并打印结果，方便排查"""
+        res = subprocess.run(["git"] + args, cwd=cwd, capture_output=True, text=True)
+        tag = " ".join(args[:3])
+        if res.returncode != 0:
+            print(f"   ❌ git {tag} → rc={res.returncode}")
+            if res.stderr.strip():
+                print(f"      stderr: {res.stderr.strip()[:300]}")
+        else:
+            if res.stdout.strip():
+                print(f"   ✅ git {tag} → {res.stdout.strip()[:200]}")
+        if check and res.returncode != 0:
+            raise subprocess.CalledProcessError(res.returncode, ["git"] + args, res.stdout, res.stderr)
+        return res
+
     def git_push_assets(self):
         """防御型推送：解决身份未知、未提交更改以及远程拒绝问题"""
-        if not self.vault_path: return
+        if not self.vault_path:
+            print("⚠️ vault_path 为空，跳过推送")
+            return
         cwd = self.vault_path
-        
-        # === 🛡️ 新增：自愈逻辑 ===
-        # 检查是否存在僵尸 rebase 锁，如果有，先杀掉
+        print(f"🔧 git_push_assets 开始，vault={cwd}")
+
+        # 自愈：检查僵尸 rebase 锁
         rebase_dir = cwd / ".git" / "rebase-merge"
         if rebase_dir.exists():
             print("🚑 检测到僵尸 Rebase 锁，正在执行战地急救...")
-            subprocess.run(["git", "rebase", "--abort"], cwd=cwd)
-            if rebase_dir.exists(): # 如果 abort 失败，直接物理删除
+            self._run_git(["rebase", "--abort"], cwd)
+            if rebase_dir.exists():
                 import shutil
                 shutil.rmtree(rebase_dir)
-        # =======================
 
         # 1. 强制注入身份
-        subprocess.run(["git", "config", "user.email", "bot@factory.com"], cwd=cwd)
-        subprocess.run(["git", "config", "user.name", "Cognitive Bot"], cwd=cwd)
-        # 解决 pull 时的 rebase 策略警告
-        subprocess.run(["git", "config", "pull.rebase", "true"], cwd=cwd)
+        self._run_git(["config", "user.email", "bot@factory.com"], cwd)
+        self._run_git(["config", "user.name", "Cognitive Bot"], cwd)
+        self._run_git(["config", "pull.rebase", "true"], cwd)
 
-        # 2. 【顺序调整】先 add 和 commit，把你的 1000 多条数据存进本地仓库
-        subprocess.run(["git", "add", "."], cwd=cwd)
-        
-        # 检查是否有东西可以 commit
-        diff_status = subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=cwd)
+        # 2. 先 add 和 commit
+        self._run_git(["add", "."], cwd)
+
+        diff_status = self._run_git(["diff", "--cached", "--quiet"], cwd)
         if diff_status.returncode == 0:
             print("💤 没有发现新资产，跳过同步。")
             return
 
         # 3. 执行 Commit
         commit_msg = f"🧠 Cognitive Audit: {datetime.now().strftime('%H:%M:%S')}"
-        subprocess.run(["git", "commit", "-m", commit_msg], cwd=cwd)
+        self._run_git(["commit", "-m", commit_msg], cwd)
 
-        # 4. 【同步远程】此时再 pull --rebase，Git 就能顺畅地把远程改动接在你的 commit 之后
+        # 4. pull --rebase 同步远程
         print("🔄 正在通过 rebase 同步远程仓库...")
-        subprocess.run(["git", "pull", "origin", "main", "--rebase"], cwd=cwd)
+        pull_res = self._run_git(["pull", "origin", "main", "--rebase"], cwd)
+        if pull_res.returncode != 0:
+            print(f"   ⚠️ pull --rebase 失败，尝试 rebase --abort 后继续")
+            self._run_git(["rebase", "--abort"], cwd)
 
         # 5. 带重试的推送
         for attempt in range(3):
-            subprocess.run(["git", "fetch", "origin", "main"], cwd=cwd)
-            subprocess.run(["git", "rebase", "origin/main"], cwd=cwd)
-            push_res = subprocess.run(["git", "push", "origin", "main"], cwd=cwd, capture_output=True, text=True)
+            self._run_git(["fetch", "origin", "main"], cwd)
+            rebase_res = self._run_git(["rebase", "origin/main"], cwd)
+            if rebase_res.returncode != 0:
+                print(f"   ⚠️ rebase 失败，abort 后重试")
+                self._run_git(["rebase", "--abort"], cwd)
+                time.sleep(2)
+                continue
+            push_res = self._run_git(["push", "origin", "main"], cwd)
             if push_res.returncode == 0:
                 print(f"🚀 认知资产已同步至中央银行 (批次 {datetime.now().strftime('%H:%M:%S')})")
                 return
             print(f"⏳ Push 失败，第 {attempt+1}/3 次重试...")
             time.sleep(3)
-        print(f"❌ 最终推送失败: {push_res.stderr}")
+        print(f"❌ 最终推送失败")
 
 if __name__ == "__main__":
     factory = UniversalFactory()
