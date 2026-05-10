@@ -224,10 +224,12 @@ class UniversalFactory:
         ref_id = hashlib.sha256(content.encode()).hexdigest()
 
         if ref_id in processed_ids:
+            print(f"   ⏭️ 跳过已处理: {topic_id[:50]}")
             return []
 
         results = []
         def ask_v3(s, u):
+            print(f"   🤖 调用 AI: {topic_id[:40]}...")
             st, r = self.call_ai(self.v3_model, s, u)
             if st == "SUCCESS" and "### Output" in r:
                 return r.split("### Output")[0].replace("### Thought", "").strip(), r.split("### Output")[1].strip()
@@ -250,6 +252,8 @@ class UniversalFactory:
             except Exception as e:
                 print(f"   ⚠️ Master {name} 审计异常 (topic={topic_id}): {e}")
                 continue
+        if results:
+            print(f"   ✅ {source}|{topic_id[:30]} → {len(results)} 条审计结果")
         return results
 
     def process_and_ship(self, vault_path="vault"):
@@ -265,24 +269,40 @@ class UniversalFactory:
 
         signals = self.fetch_elite_signals()
         if not signals:
+            print("⚠️ 没有获取到任何信号，退出。")
             return
 
-        for i in range(0, len(signals), cfg.AUDIT_BATCH_SIZE):
+        total = len(signals)
+        print(f"📊 共获取 {total} 条信号，开始审计...")
+
+        for i in range(0, total, cfg.AUDIT_BATCH_SIZE):
             chunk = signals[i:i + cfg.AUDIT_BATCH_SIZE]
+            batch_num = i // cfg.AUDIT_BATCH_SIZE + 1
+            print(f"🔄 批次 {batch_num}: 处理 {len(chunk)} 条 (进度 {i}/{total})")
             with ThreadPoolExecutor(max_workers=cfg.AUDIT_WORKERS) as executor:
                 res = list(executor.map(lambda r: self.audit_process(r, processed_ids), chunk))
 
             added = []
+            skipped = 0
             for r_list in res:
                 if r_list:
                     added.extend(r_list)
                     for r_json in r_list:
                         processed_ids.add(json.loads(r_json).get('ref_id'))
+                else:
+                    skipped += 1
+
+            print(f"   📝 批次 {batch_num} 结果: {len(added)} 条产出, {skipped} 条跳过")
 
             if added:
                 with open(output_file, 'a', encoding='utf-8') as f:
                     f.write('\n'.join(added) + '\n')
+                print(f"   💾 已写入 {output_file.name}")
                 self.git_push_assets()
+            else:
+                print(f"   💤 批次 {batch_num} 无产出，跳过推送。")
+
+        print(f"✅ 全部完成。总信号: {total}, 已处理: {len(processed_ids)}")
 
     def call_ai(self, model, sys_prompt, usr_prompt):
         headers = {
