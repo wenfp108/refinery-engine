@@ -199,7 +199,7 @@ def get_hot_items(supabase, table_name):
     if sniper_pool:
         refined = anti_flood_filter(sniper_pool)
         refined.sort(key=lambda x: x['_temp_score'], reverse=True)
-        sector_matrix["🎯 SNIPER (核心监控)"] = build_markdown(refined)
+        sector_matrix["🎯 SNIPER (核心监控)"] = build_markdown(refined[:6])  # 最多6条，防止刷屏
 
     # 🔥 3. 顺序：政治压轴
     SECTORS_LIST = [
