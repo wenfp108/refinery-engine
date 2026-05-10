@@ -315,8 +315,17 @@ def sync_bank_to_sql(processors_config, full_scan=False):
                         stats[source_key] += added
         except Exception as e: print(f"❌ Scan Error: {e}")
     else:
-        # 增量模式：3h 窗口（每小时跑，3h 重叠 2 次防漏）
-        since = datetime.now(timezone.utc) - timedelta(hours=3)
+        # 增量模式：用 processed_files 追踪进度，不靠固定时间窗口
+        try:
+            res = supabase.table("processed_files").select("created_at").order("created_at", desc=True).limit(1).execute()
+            if res.data:
+                since_str = res.data[0]['created_at'].replace('Z', '+00:00')
+                since = datetime.fromisoformat(since_str) - timedelta(hours=1)  # 回退1小时防漏
+            else:
+                since = datetime.now(timezone.utc) - timedelta(hours=3)
+        except Exception:
+            since = datetime.now(timezone.utc) - timedelta(hours=3)
+
         try:
             commits = private_repo.get_commits(since=since)
             commit_count = 0
