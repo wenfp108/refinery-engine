@@ -2,7 +2,7 @@ name: 🚀 Daily Heartbeat (Anti-Suspension)
 
 on:
   schedule:
-    - cron: '0 0 * * *' # UTC 00:00 = 北京时间 08:00
+    - cron: '0 0 * * *'
   workflow_dispatch:
 
 permissions:
@@ -18,8 +18,7 @@ jobs:
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-
-          python3 -c "
+          python3 << 'PYEOF'
           import datetime, os
           filename = "README.md"
           if os.path.exists(filename):
@@ -28,12 +27,10 @@ jobs:
               with open(filename, "w", encoding="utf-8") as f:
                   for line in lines:
                       if "Last Updated" in line:
-                          f.write(f"    * **Last Updated**: {datetime.date.today()}
-")
+                          f.write(f"    * **Last Updated**: {datetime.date.today()}\n")
                       else:
                           f.write(line)
-          "
-
+          PYEOF
           git add README.md
           git commit -m "chore: daily heartbeat [skip ci]" || echo "No changes"
           git pull --rebase
@@ -41,7 +38,7 @@ jobs:
 
       - name: 📂 数据目录重组 (仅昨天)
         run: |
-          python3 -c "
+          python3 << 'PYEOF'
           import os, subprocess
           from datetime import datetime, timedelta, timezone
 
@@ -49,7 +46,6 @@ jobs:
           target = bj_now - timedelta(days=2)
           target_str = target.strftime("%Y-%m-%d")
           y, m, d = target.strftime("%Y"), target.strftime("%m"), target.strftime("%d")
-
           print(f"📅 重组目标日期: {target_str} → {y}/{m}/{d}")
 
           migrated = 0
@@ -69,11 +65,11 @@ jobs:
               migrated += 1
               return True
 
-          for kind, src_base, is_file in [
-              ("Papers", f"papers/global/{target_str}", False),
-              ("Polymarket/strategy", f"polymarket/strategy/{target_str}", False),
-              ("Polymarket/trends", f"polymarket/trends/{target_str}", False),
-              ("GitHub/Tech", f"github/tech/{target_str}", False),
+          for src_base in [
+              f"papers/global/{target_str}",
+              f"polymarket/strategy/{target_str}",
+              f"polymarket/trends/{target_str}",
+              f"github/tech/{target_str}",
           ]:
               if os.path.isdir(src_base):
                   dst_base = src_base.replace(target_str, f"{y}/{m}/{d}")
@@ -107,4 +103,4 @@ jobs:
                   import time; time.sleep(5)
           else:
               print("ℹ️ 无需重组")
-          "
+          PYEOF
