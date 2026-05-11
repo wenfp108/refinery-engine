@@ -28,13 +28,15 @@ jobs:
               with open(filename, 'w', encoding='utf-8') as f:
                   for line in lines:
                       if 'Last Updated' in line:
-                          f.write(f'    * **Last Updated**: {datetime.date.today()}\n')
+                          f.write(f'    * **Last Updated**: {datetime.date.today()}
+')
                       else:
                           f.write(line)
           "
 
           git add README.md
           git commit -m "chore: daily heartbeat [skip ci]" || echo "No changes"
+          git pull --rebase
           git push
 
       - name: 📂 数据目录重组 (仅昨天)
@@ -94,7 +96,8 @@ jobs:
           # === 1. Papers ===
           src_dir = f"papers/global/{target_str}"
           if os.path.isdir(src_dir):
-              print(f"\n📄 Papers: {src_dir}")
+              print(f"
+📄 Papers: {src_dir}")
               dst_dir = f"papers/global/{y}/{m}/{d}"
               for fname in sorted(os.listdir(src_dir)):
                   if git_mv(f"{src_dir}/{fname}", f"{dst_dir}/{fname}"):
@@ -109,7 +112,8 @@ jobs:
               src_dir = f"polymarket/{sub}/{target_str}"
               if not os.path.isdir(src_dir):
                   continue
-              print(f"\n📊 Polymarket/{sub}: {src_dir}")
+              print(f"
+📊 Polymarket/{sub}: {src_dir}")
               dst_dir = f"polymarket/{sub}/{y}/{m}/{d}"
               for fname in sorted(os.listdir(src_dir)):
                   if git_mv(f"{src_dir}/{fname}", f"{dst_dir}/{fname}"):
@@ -122,7 +126,8 @@ jobs:
           # === 3. Twitter ===
           src_file = f"twitter/{target_str}.json"
           if os.path.isfile(src_file):
-              print(f"\n🐦 Twitter: {src_file}")
+              print(f"
+🐦 Twitter: {src_file}")
               dst_dir = f"twitter/{y}/{m}/{d}"
               if git_mv(src_file, f"{dst_dir}/{target_str}.json"):
                   migrated += 1
@@ -130,7 +135,8 @@ jobs:
           # === 4. Reddit ===
           month_dir = f"reddit/sentiment/{y}/{m}"
           if os.path.isdir(month_dir):
-              print(f"\n📱 Reddit: {month_dir}")
+              print(f"
+📱 Reddit: {month_dir}")
               dst_dir = f"reddit/sentiment/{y}/{m}/{d}"
               for fname in sorted(os.listdir(month_dir)):
                   fpath = os.path.join(month_dir, fname)
@@ -141,7 +147,8 @@ jobs:
           # === 5. GitHub Tech ===
           src_dir = f"github/tech/{target_str}"
           if os.path.isdir(src_dir):
-              print(f"\n🔧 GitHub/Tech: {src_dir}")
+              print(f"
+🔧 GitHub/Tech: {src_dir}")
               dst_dir = f"github/tech/{y}/{m}/{d}"
               for fname in sorted(os.listdir(src_dir)):
                   if git_mv(f"{src_dir}/{fname}", f"{dst_dir}/{fname}"):
@@ -152,11 +159,13 @@ jobs:
                   pass
 
           # === 结果 ===
-          print(f"\n{'='*50}")
+          print(f"
+{'='*50}")
           print(f"📊 总计: {migrated} 个文件")
 
           if errors:
-              print(f"\n❌ {len(errors)} 个错误，中止提交:")
+              print(f"
+❌ {len(errors)} 个错误，中止提交:")
               for e in errors:
                   print(f"  - {e}")
               raise SystemExit(1)
