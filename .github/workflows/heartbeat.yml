@@ -49,16 +49,10 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           python3 << 'PYEOF'
-          import os, re, subprocess
+          import os, re, subprocess, shutil
           from datetime import datetime, timedelta, timezone
 
-          # ============================================================
-          # 扫描所有目录，把 YYYY-MM-DD 扁平结构归档为 YYYY/MM/DD 层级
-          # ============================================================
-
           DATE_PATTERN = re.compile(r'^\d{4}-\d{2}-\d{2}$')
-
-          # 需要扫描的目录列表
           SCAN_DIRS = [
               "papers/global",
               "polymarket/strategy",
@@ -66,7 +60,6 @@ jobs:
               "github/tech",
           ]
 
-          # 今天日期，用于跳过今天和未来
           bj_now = datetime.now(timezone(timedelta(hours=8)))
           today_str = bj_now.strftime("%Y-%m-%d")
 
@@ -74,10 +67,12 @@ jobs:
           all_errors = []
 
           def git_mv(src, dst):
-              if os.path.exists(dst):
-                  print(f"  ⚠️ 目标已存在: {dst}")
-                  return False
+              """移动文件，目标已存在则覆盖"""
               os.makedirs(os.path.dirname(dst), exist_ok=True)
+              if os.path.exists(dst):
+                  # 目标已存在，用新文件覆盖
+                  os.remove(dst)
+                  print(f"  ♻️ 覆盖: {dst}")
               r = subprocess.run(["git", "mv", src, dst], capture_output=True, text=True)
               if r.returncode != 0:
                   all_errors.append(f"{src} → {dst}: {r.stderr.strip()}")
@@ -86,7 +81,6 @@ jobs:
               return True
 
           def reorganize_dir(base_dir):
-              """扫描 base_dir 下所有 YYYY-MM-DD 子目录，归档为 YYYY/MM/DD"""
               migrated = 0
               if not os.path.isdir(base_dir):
                   return 0
@@ -108,7 +102,7 @@ jobs:
                   except: pass
               return migrated
 
-          # === 1. 扫描目录 ===
+          # === 1. 目录类 ===
           for scan_dir in SCAN_DIRS:
               n = reorganize_dir(scan_dir)
               total_migrated += n
@@ -118,10 +112,6 @@ jobs:
           # === 2. Twitter 单文件 ===
           twitter_dir = "twitter"
           if os.path.isdir(twitter_dir):
-              for name in sorted(os.listdir(twitter_dir)):
-                  if DATE_PATTERN.match(name) and name.endswith(".json") is False:
-                      # 跳过已经是目录的
-                      pass
               for name in sorted(os.listdir(twitter_dir)):
                   full = os.path.join(twitter_dir, name)
                   if os.path.isfile(full) and name.endswith(".json"):
@@ -143,7 +133,6 @@ jobs:
                       month_path = os.path.join(year_path, month)
                       if not os.path.isdir(month_path) or not month.isdigit():
                           continue
-                      # 检查月目录下是否有 YYYY-MM-DD.json 扁平文件
                       for fname in sorted(os.listdir(month_path)):
                           if fname.endswith(".json"):
                               date_str = fname.replace(".json", "")
