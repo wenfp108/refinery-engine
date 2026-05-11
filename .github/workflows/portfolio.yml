@@ -2,7 +2,7 @@ name: 🚀 Portfolio Tracker
 
 on:
   schedule:
-    - cron: '30 21 * * 1-5'  # 每个交易日 21:30 UTC (美股收盘后)
+    - cron: '30 21 * * 1-5'  # 每个交易日 21:30 UTC (美股收盘后) # re-enable
     - cron: '0 1 1 * *'      # 每月1号 01:00 UTC (定投日)
   workflow_dispatch:
     inputs:
