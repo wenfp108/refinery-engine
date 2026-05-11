@@ -3,7 +3,7 @@ name: 🚀 Daily Heartbeat (Anti-Suspension)
 on:
   schedule:
     - cron: '0 0 * * *' # UTC 00:00 = 北京时间 08:00
-  workflow_dispatch:   # 支持手动触发
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -21,15 +21,15 @@ jobs:
 
           python3 -c "
           import datetime, os
-          filename = 'README.md'
+          filename = "README.md"
           if os.path.exists(filename):
-              with open(filename, 'r', encoding='utf-8') as f:
+              with open(filename, "r", encoding="utf-8") as f:
                   lines = f.readlines()
-              with open(filename, 'w', encoding='utf-8') as f:
+              with open(filename, "w", encoding="utf-8") as f:
                   for line in lines:
-                      if 'Last Updated' in line:
-                          f.write(f'    * **Last Updated**: {datetime.date.today()}
-')
+                      if "Last Updated" in line:
+                          f.write(f"    * **Last Updated**: {datetime.date.today()}
+")
                       else:
                           f.write(line)
           "
@@ -41,157 +41,70 @@ jobs:
 
       - name: 📂 数据目录重组 (仅昨天)
         run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-
-          python3 << 'PYEOF'
-          import os
-          import subprocess
+          python3 -c "
+          import os, subprocess
           from datetime import datetime, timedelta, timezone
 
-          # ============================================================
-          # 数据目录重组脚本
-          # 将 flat date 结构 (2026-05-08) 迁移到层级结构 (2026/05/08)
-          # ============================================================
-          #
-          # 安全措施:
-          #   1. 只处理昨天的数据，不碰今天和未来
-          #   2. 使用 git mv（不是 rm + add），保留 git 历史
-          #   3. 预检查目标路径不存在，避免覆盖
-          #   4. 任何 git mv 失败立即中止，不提交
-          #   5. 全部成功才 commit + push
-          #   6. 完整日志记录所有操作
-          # ============================================================
-
           bj_now = datetime.now(timezone(timedelta(hours=8)))
-          target = bj_now - timedelta(days=2)  # 前天，给炼油机留 24h 缓冲
-          target_str = target.strftime('%Y-%m-%d')
-          y = target.strftime('%Y')
-          m = target.strftime('%m')
-          d = target.strftime('%d')
+          target = bj_now - timedelta(days=2)
+          target_str = target.strftime("%Y-%m-%d")
+          y, m, d = target.strftime("%Y"), target.strftime("%m"), target.strftime("%d")
 
-          print(f"📅 重组目标日期（前天）: {target_str} → {y}/{m}/{d}")
+          print(f"📅 重组目标日期: {target_str} → {y}/{m}/{d}")
 
           migrated = 0
           errors = []
 
           def git_mv(src, dst):
-              """安全移动：预检查 + git mv"""
+              global migrated
               if os.path.exists(dst):
-                  print(f"  ⚠️ 目标已存在，跳过: {dst}")
+                  print(f"  ⚠️ 目标已存在: {dst}")
                   return False
               os.makedirs(os.path.dirname(dst), exist_ok=True)
-              result = subprocess.run(
-                  ['git', 'mv', src, dst],
-                  capture_output=True, text=True
-              )
-              if result.returncode != 0:
-                  err = f"git mv 失败: {src} → {dst}: {result.stderr.strip()}"
-                  errors.append(err)
-                  print(f"  ❌ {err}")
+              r = subprocess.run(["git", "mv", src, dst], capture_output=True, text=True)
+              if r.returncode != 0:
+                  errors.append(f"{src} → {dst}: {r.stderr.strip()}")
                   return False
               print(f"  ✅ {src} → {dst}")
+              migrated += 1
               return True
 
-          # === 1. Papers ===
-          src_dir = f"papers/global/{target_str}"
-          if os.path.isdir(src_dir):
-              print(f"
-📄 Papers: {src_dir}")
-              dst_dir = f"papers/global/{y}/{m}/{d}"
-              for fname in sorted(os.listdir(src_dir)):
-                  if git_mv(f"{src_dir}/{fname}", f"{dst_dir}/{fname}"):
-                      migrated += 1
-              try:
-                  os.rmdir(src_dir)
-              except OSError:
-                  pass
+          for kind, src_base, is_file in [
+              ("Papers", f"papers/global/{target_str}", False),
+              ("Polymarket/strategy", f"polymarket/strategy/{target_str}", False),
+              ("Polymarket/trends", f"polymarket/trends/{target_str}", False),
+              ("GitHub/Tech", f"github/tech/{target_str}", False),
+          ]:
+              if os.path.isdir(src_base):
+                  dst_base = src_base.replace(target_str, f"{y}/{m}/{d}")
+                  for fname in sorted(os.listdir(src_base)):
+                      git_mv(f"{src_base}/{fname}", f"{dst_base}/{fname}")
+                  try: os.rmdir(src_base)
+                  except: pass
 
-          # === 2. Polymarket ===
-          for sub in ['strategy', 'trends']:
-              src_dir = f"polymarket/{sub}/{target_str}"
-              if not os.path.isdir(src_dir):
-                  continue
-              print(f"
-📊 Polymarket/{sub}: {src_dir}")
-              dst_dir = f"polymarket/{sub}/{y}/{m}/{d}"
-              for fname in sorted(os.listdir(src_dir)):
-                  if git_mv(f"{src_dir}/{fname}", f"{dst_dir}/{fname}"):
-                      migrated += 1
-              try:
-                  os.rmdir(src_dir)
-              except OSError:
-                  pass
-
-          # === 3. Twitter ===
           src_file = f"twitter/{target_str}.json"
           if os.path.isfile(src_file):
-              print(f"
-🐦 Twitter: {src_file}")
-              dst_dir = f"twitter/{y}/{m}/{d}"
-              if git_mv(src_file, f"{dst_dir}/{target_str}.json"):
-                  migrated += 1
+              git_mv(src_file, f"twitter/{y}/{m}/{d}/{target_str}.json")
 
-          # === 4. Reddit ===
           month_dir = f"reddit/sentiment/{y}/{m}"
           if os.path.isdir(month_dir):
-              print(f"
-📱 Reddit: {month_dir}")
               dst_dir = f"reddit/sentiment/{y}/{m}/{d}"
               for fname in sorted(os.listdir(month_dir)):
                   fpath = os.path.join(month_dir, fname)
                   if os.path.isfile(fpath):
-                      if git_mv(fpath, f"{dst_dir}/{fname}"):
-                          migrated += 1
+                      git_mv(fpath, f"{dst_dir}/{fname}")
 
-          # === 5. GitHub Tech ===
-          src_dir = f"github/tech/{target_str}"
-          if os.path.isdir(src_dir):
-              print(f"
-🔧 GitHub/Tech: {src_dir}")
-              dst_dir = f"github/tech/{y}/{m}/{d}"
-              for fname in sorted(os.listdir(src_dir)):
-                  if git_mv(f"{src_dir}/{fname}", f"{dst_dir}/{fname}"):
-                      migrated += 1
-              try:
-                  os.rmdir(src_dir)
-              except OSError:
-                  pass
-
-          # === 结果 ===
-          print(f"
-{'='*50}")
           print(f"📊 总计: {migrated} 个文件")
-
           if errors:
-              print(f"
-❌ {len(errors)} 个错误，中止提交:")
-              for e in errors:
-                  print(f"  - {e}")
+              for e in errors: print(f"  ❌ {e}")
               raise SystemExit(1)
-
-          if migrated == 0:
-              print("ℹ️ 无需重组")
+          if migrated > 0:
+              subprocess.run(["git", "commit", "-m", f"chore: reorganize {target_str} [skip ci]"], check=True)
+              subprocess.run(["git", "pull", "--rebase"], check=True)
+              for i in range(3):
+                  if subprocess.run(["git", "push"]).returncode == 0:
+                      print("✅ 推送成功"); break
+                  import time; time.sleep(5)
           else:
-              result = subprocess.run(
-                  ['git', 'commit', '-m', f'chore: reorganize {target_str} data → {y}/{m}/{d} [skip ci]'],
-                  capture_output=True, text=True
-              )
-              if result.returncode == 0:
-                  subprocess.run(['git', 'pull', '--rebase'], check=True)
-                  # push 重试 3 次，防止网络波动
-                  for attempt in range(3):
-                      push_r = subprocess.run(['git', 'push'], capture_output=True, text=True)
-                      if push_r.returncode == 0:
-                          print(f"✅ 已提交并推送")
-                          break
-                      print(f"⚠️ push 失败 (第{attempt+1}次): {push_r.stderr.strip()}")
-                      if attempt < 2:
-                          import time; time.sleep(5)
-                  else:
-                      print("❌ push 重试 3 次均失败")
-                      raise SystemExit(1)
-              else:
-                  print(f"⚠️ 提交失败: {result.stderr}")
-                  raise SystemExit(1)
-          PYEOF
+              print("ℹ️ 无需重组")
+          "
