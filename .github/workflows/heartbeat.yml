@@ -43,74 +43,130 @@ jobs:
           git pull --rebase
           git push
 
-      - name: 📂 数据目录重组 (仅昨天)
+      - name: 📂 数据目录重组 (全部未归档)
         working-directory: Central-Bank
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           python3 << 'PYEOF'
-          import os, subprocess
+          import os, re, subprocess
           from datetime import datetime, timedelta, timezone
 
-          bj_now = datetime.now(timezone(timedelta(hours=8)))
-          target = bj_now - timedelta(days=2)
-          target_str = target.strftime("%Y-%m-%d")
-          y, m, d = target.strftime("%Y"), target.strftime("%m"), target.strftime("%d")
-          print(f"📅 重组目标日期: {target_str} → {y}/{m}/{d}")
+          # ============================================================
+          # 扫描所有目录，把 YYYY-MM-DD 扁平结构归档为 YYYY/MM/DD 层级
+          # ============================================================
 
-          migrated = 0
-          errors = []
+          DATE_PATTERN = re.compile(r'^\d{4}-\d{2}-\d{2}$')
+
+          # 需要扫描的目录列表
+          SCAN_DIRS = [
+              "papers/global",
+              "polymarket/strategy",
+              "polymarket/trends",
+              "github/tech",
+          ]
+
+          # 今天日期，用于跳过今天和未来
+          bj_now = datetime.now(timezone(timedelta(hours=8)))
+          today_str = bj_now.strftime("%Y-%m-%d")
+
+          total_migrated = 0
+          all_errors = []
 
           def git_mv(src, dst):
-              global migrated
               if os.path.exists(dst):
                   print(f"  ⚠️ 目标已存在: {dst}")
                   return False
               os.makedirs(os.path.dirname(dst), exist_ok=True)
               r = subprocess.run(["git", "mv", src, dst], capture_output=True, text=True)
               if r.returncode != 0:
-                  errors.append(f"{src} → {dst}: {r.stderr.strip()}")
+                  all_errors.append(f"{src} → {dst}: {r.stderr.strip()}")
                   return False
               print(f"  ✅ {src} → {dst}")
-              migrated += 1
               return True
 
-          for src_base in [
-              f"papers/global/{target_str}",
-              f"polymarket/strategy/{target_str}",
-              f"polymarket/trends/{target_str}",
-              f"github/tech/{target_str}",
-          ]:
-              if os.path.isdir(src_base):
-                  dst_base = src_base.replace(target_str, f"{y}/{m}/{d}")
-                  for fname in sorted(os.listdir(src_base)):
-                      git_mv(f"{src_base}/{fname}", f"{dst_base}/{fname}")
-                  try: os.rmdir(src_base)
+          def reorganize_dir(base_dir):
+              """扫描 base_dir 下所有 YYYY-MM-DD 子目录，归档为 YYYY/MM/DD"""
+              migrated = 0
+              if not os.path.isdir(base_dir):
+                  return 0
+              for name in sorted(os.listdir(base_dir)):
+                  if not DATE_PATTERN.match(name):
+                      continue
+                  if name >= today_str:
+                      continue
+                  src_path = os.path.join(base_dir, name)
+                  if not os.path.isdir(src_path):
+                      continue
+                  y, m, d = name.split("-")
+                  dst_path = os.path.join(base_dir, y, m, d)
+                  print(f"\n📁 {src_path}")
+                  for fname in sorted(os.listdir(src_path)):
+                      if git_mv(os.path.join(src_path, fname), os.path.join(dst_path, fname)):
+                          migrated += 1
+                  try: os.rmdir(src_path)
                   except: pass
+              return migrated
 
-          src_file = f"twitter/{target_str}.json"
-          if os.path.isfile(src_file):
-              git_mv(src_file, f"twitter/{y}/{m}/{d}/{target_str}.json")
+          # === 1. 扫描目录 ===
+          for scan_dir in SCAN_DIRS:
+              n = reorganize_dir(scan_dir)
+              total_migrated += n
+              if n > 0:
+                  print(f"  📊 {scan_dir}: {n} 个文件")
 
-          month_dir = f"reddit/sentiment/{y}/{m}"
-          if os.path.isdir(month_dir):
-              dst_dir = f"reddit/sentiment/{y}/{m}/{d}"
-              for fname in sorted(os.listdir(month_dir)):
-                  fpath = os.path.join(month_dir, fname)
-                  if os.path.isfile(fpath):
-                      git_mv(fpath, f"{dst_dir}/{fname}")
+          # === 2. Twitter 单文件 ===
+          twitter_dir = "twitter"
+          if os.path.isdir(twitter_dir):
+              for name in sorted(os.listdir(twitter_dir)):
+                  if DATE_PATTERN.match(name) and name.endswith(".json") is False:
+                      # 跳过已经是目录的
+                      pass
+              for name in sorted(os.listdir(twitter_dir)):
+                  full = os.path.join(twitter_dir, name)
+                  if os.path.isfile(full) and name.endswith(".json"):
+                      date_str = name.replace(".json", "")
+                      if DATE_PATTERN.match(date_str) and date_str < today_str:
+                          y, m, d = date_str.split("-")
+                          dst = os.path.join(twitter_dir, y, m, d, name)
+                          if git_mv(full, dst):
+                              total_migrated += 1
 
-          print(f"📊 总计: {migrated} 个文件")
-          if errors:
-              for e in errors: print(f"  ❌ {e}")
+          # === 3. Reddit ===
+          reddit_base = "reddit/sentiment"
+          if os.path.isdir(reddit_base):
+              for year in sorted(os.listdir(reddit_base)):
+                  year_path = os.path.join(reddit_base, year)
+                  if not os.path.isdir(year_path) or not year.isdigit():
+                      continue
+                  for month in sorted(os.listdir(year_path)):
+                      month_path = os.path.join(year_path, month)
+                      if not os.path.isdir(month_path) or not month.isdigit():
+                          continue
+                      # 检查月目录下是否有 YYYY-MM-DD.json 扁平文件
+                      for fname in sorted(os.listdir(month_path)):
+                          if fname.endswith(".json"):
+                              date_str = fname.replace(".json", "")
+                              if DATE_PATTERN.match(date_str) and date_str < today_str:
+                                  d = date_str.split("-")[2]
+                                  dst = os.path.join(month_path, d, fname)
+                                  if git_mv(os.path.join(month_path, fname), dst):
+                                      total_migrated += 1
+
+          # === 结果 ===
+          print(f"\n{'='*50}")
+          print(f"📊 总计: {total_migrated} 个文件")
+          if all_errors:
+              for e in all_errors: print(f"  ❌ {e}")
               raise SystemExit(1)
-          if migrated > 0:
-              subprocess.run(["git", "commit", "-m", f"chore: reorganize {target_str} [skip ci]"], check=True)
+          if total_migrated > 0:
+              subprocess.run(["git", "add", "-A"], check=True)
+              subprocess.run(["git", "commit", "-m", f"chore: reorganize all flat dirs [skip ci]"], check=True)
               subprocess.run(["git", "pull", "--rebase"], check=True)
               for i in range(3):
                   if subprocess.run(["git", "push"]).returncode == 0:
                       print("✅ 推送成功"); break
                   import time; time.sleep(5)
           else:
-              print("ℹ️ 无需重组")
+              print("ℹ️ 所有目录已是层级结构")
           PYEOF
