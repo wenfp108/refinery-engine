@@ -14,6 +14,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Checkout Central-Bank
+        uses: actions/checkout@v4
+        with:
+          repository: wenfp108/Central-Bank
+          path: Central-Bank
+          token: ${{ secrets.GH_PAT }}
+
       - name: 🛡️ 稳健打卡
         run: |
           git config --global user.name "github-actions[bot]"
@@ -37,7 +44,10 @@ jobs:
           git push
 
       - name: 📂 数据目录重组 (仅昨天)
+        working-directory: Central-Bank
         run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
           python3 << 'PYEOF'
           import os, subprocess
           from datetime import datetime, timedelta, timezone
