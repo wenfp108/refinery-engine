@@ -522,6 +522,95 @@ def _snapshot_for_date(snap_date, prices, vix=None):
     (DATA / f'snapshot_{snap_date}.json').write_text(json.dumps(snapshot, indent=2, default=str))
 
 
+# ---- 报告生成 ----
+
+def generate_report():
+    """从 snapshot 文件生成 markdown 日报"""
+    # 读取所有快照
+    snapshots = sorted(DATA.glob('snapshot_*.json'))
+    if not snapshots:
+        print("❌ 没有快照数据")
+        return
+
+    # 计算总投入（从 trades.jsonl）
+    trades_file = DATA / 'trades.jsonl'
+    total_invested = 0
+    first_trade_date = None
+    if trades_file.exists():
+        for line in trades_file.read_text().strip().split('\n'):
+            if line.strip():
+                t = json.loads(line)
+                total_invested += float(t.get('amount', 0))
+                d = t.get('date', '')
+                if d and (first_trade_date is None or d < first_trade_date):
+                    first_trade_date = d
+
+    # 读取所有快照数据
+    rows = []
+    for sf in snapshots:
+        snap = json.loads(sf.read_text())
+        snap_date = snap.get('date', sf.stem.replace('snapshot_', ''))
+        total = snap.get('total_value', 0)
+        cum_ret = snap.get('cumulative_return', 0)
+        daily_ret = snap.get('daily_return', 0) or 0
+        vix = snap.get('vix')
+        positions = snap.get('positions', {})
+
+        # 最佳/最差持仓（按 pnl_pct）
+        best_sym, best_pct = '-', 0
+        worst_sym, worst_pct = '-', 0
+        for sym, d in positions.items():
+            if sym == 'CASH':
+                continue
+            pct = d.get('pnl_pct', 0)
+            if pct > best_pct:
+                best_sym, best_pct = sym, pct
+            if pct < worst_pct:
+                worst_sym, worst_pct = sym, pct
+
+        # CPI 通胀扣除
+        cpi_adj = cum_ret
+        if first_trade_date:
+            days = (datetime.strptime(snap_date, '%Y-%m-%d').date() -
+                    datetime.strptime(first_trade_date, '%Y-%m-%d').date()).days
+            cpi_adj = cum_ret - (days / 365) * CPI_ANNUAL * 100
+
+        rows.append({
+            'date': snap_date,
+            'total': total,
+            'invested': total_invested,
+            'cum_ret': cum_ret,
+            'cpi_adj': cpi_adj,
+            'daily_ret': daily_ret,
+            'vix': vix,
+            'best': f"{best_sym} +{best_pct:.1f}%" if best_pct > 0 else f"{best_sym} {best_pct:.1f}%",
+            'worst': f"{worst_sym} {worst_pct:.1f}%",
+        })
+
+    # 生成 markdown
+    lines = [
+        '# 模拟组合日报\n',
+        '| 日期 | 总市值 | 投入 | 累计收益 | 扣通胀 | 日收益 | VIX | 最佳 | 最差 |',
+        '|------|--------|------|---------|--------|--------|-----|------|------|',
+    ]
+    for r in reversed(rows):
+        vix_str = f"{r['vix']:.1f}" if r['vix'] else '-'
+        lines.append(
+            f"| {r['date']} | ¥{r['total']:,.0f} | ¥{r['invested']:,.0f} "
+            f"| {r['cum_ret']:+.2f}% | {r['cpi_adj']:+.2f}% "
+            f"| {r['daily_ret']:+.2f}% | {vix_str} | {r['best']} | {r['worst']} |"
+        )
+
+    md = '\n'.join(lines) + '\n'
+
+    # 写入本地
+    report_dir = BANK / 'reports' / 'portfolio'
+    report_dir.mkdir(parents=True, exist_ok=True)
+    report_path = report_dir / 'portfolio.md'
+    report_path.write_text(md)
+    print(f"✅ 报告已生成: {report_path} ({len(rows)} 条记录)")
+
+
 # ---- CLI ----
 
 if __name__ == '__main__':
@@ -536,12 +625,15 @@ if __name__ == '__main__':
         # 每月定投
         simulate_dca(amount=MONTHLY_INVESTMENT, trade_date=str(date.today()))
         daily_snapshot()
+    elif cmd == 'report':
+        generate_report()
     elif cmd == 'backtest':
         start = sys.argv[2] if len(sys.argv) > 2 else '2026-03-01'
         backtest(start)
     else:
-        print("Usage: python portfolio.py [init|dca|snapshot|backtest]")
+        print("Usage: python portfolio.py [init|dca|snapshot|report|backtest]")
         print("  init      - 初始资金一次性买入")
         print("  dca       - 每月定投买入")
         print("  snapshot  - 记录当日快照")
+        print("  report    - 生成 markdown 日报")
         print("  backtest  - 回测（默认从2026-03-01开始）")
