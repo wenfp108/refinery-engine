@@ -15,6 +15,7 @@ on:
           - snapshot
           - dca
           - init
+          - report
 
 concurrency:
   group: portfolio
@@ -60,6 +61,9 @@ jobs:
               python portfolio.py snapshot
             fi
           fi
+
+      - name: Generate report
+        run: python portfolio.py report
 
       - name: Push results to Central-Bank
         run: |
