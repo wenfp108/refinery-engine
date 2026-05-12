@@ -532,15 +532,13 @@ def generate_report():
         print("❌ 没有快照数据")
         return
 
-    # 计算总投入（从 trades.jsonl）
+    # 从 trades.jsonl 获取首笔交易日期（用于 CPI 计算）
     trades_file = DATA / 'trades.jsonl'
-    total_invested = 0
     first_trade_date = None
     if trades_file.exists():
         for line in trades_file.read_text().strip().split('\n'):
             if line.strip():
                 t = json.loads(line)
-                total_invested += float(t.get('amount', 0))
                 d = t.get('date', '')
                 if d and (first_trade_date is None or d < first_trade_date):
                     first_trade_date = d
@@ -555,6 +553,9 @@ def generate_report():
         daily_ret = snap.get('daily_return', 0) or 0
         vix = snap.get('vix')
         positions = snap.get('positions', {})
+
+        # 总投入 = 当前市值 / (1 + 累计收益率)
+        total_invested = round(total / (1 + cum_ret / 100)) if cum_ret != -100 else 0
 
         # 最佳/最差持仓（按 pnl_pct）
         best_sym, best_pct = '-', 0
