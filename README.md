@@ -25,9 +25,9 @@
 
 | 仓库 | 用途 |
 |------|------|
-| [Refinery-Engine](https://github.com/wenfp108/refinery-erngine) | 本仓库。数据清洗、AI 审计、自动归档 |
-| [Masters-Council](https://github.com/wenfp108/Masters-Council) | 审计插件（达里奥、塔勒布、芒格等大师视角） |
-| [Central-Bank](https://github.com/wenfp108/Central-Bank) | 原始信号 JSON 存储 + 审计结果归档 |
+| [Refinery-Engine](https://github.com/wenfp108/refinery-engine) | 本仓库。数据清洗、AI 审计、自动归档 |
+| Masters-Council（私有仓库） | 审计插件（达里奥、塔勒布、芒格等大师视角） |
+| Central-Bank（私有仓库） | 原始信号 JSON 存储 + 审计结果归档 |
 
 ## 数据流
 
